@@ -1,0 +1,12 @@
+{
+  "name": "透析 穿刺トレーニングVR",
+  "short_name": "穿刺VR",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#10233a",
+  "theme_color": "#10233a",
+  "lang": "ja",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
