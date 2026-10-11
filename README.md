@@ -1,7 +1,7 @@
 # 透析室 穿刺トレーニングVR（Meta Quest 3）
 
 Quest 3 のブラウザだけで動作する WebXR アプリです（PC・Unity 不要）。
-PWA としてホームにインストールすると、ネット接続なしでも単独起動できます。
+GitHub Pages などの HTTPS に置けば Quest 3 単体（PC なし）で動きます。Quest のブラウザでブックマークして起動します（一度開けば Service Worker のキャッシュでオフラインでも開けます。Meta Quest ブラウザには一般サイトを「アプリとしてインストール」する機能はなく、アプリ一覧に出したい場合は Meta の Bubblewrap で APK 化してサイドロードします）。
 
 ## 内容
 - 透析室（臥床した患者、透析装置とモニター、血液回路、点滴スタンド、器具カート、カーテン、窓など）
@@ -75,7 +75,7 @@ PWA としてホームにインストールすると、ネット接続なしで�
 2. このフォルダで `python serve.py` を実行 → 表示された `https://<IP>:8443/` をメモ
 3. Quest 3 のブラウザで URL を開く（自己署名証明書の警告 →「詳細設定」→「アクセスする」）
 4. 「VR を開始」を押す
-5. 単独起動したい場合: ブラウザ右上メニュー →「アプリとしてインストール」→ 以降はアプリライブラリから起動（オフライン可）
+5. 単独起動したい場合: `dist` フォルダの中身を GitHub Pages（Public リポジトリ → Settings → Pages → main / root）に置き、Quest のブラウザでその URL をブックマーク。以降はブラウザ → ブックマークから起動（一度開けばオフライン可）。アプリ一覧から起動したい場合は Meta の Bubblewrap（@meta-quest/bubblewrap-core）で APK を作ってサイドロード
 
 ### 証明書の再作成（必要な場合）
 ```
@@ -111,4 +111,4 @@ PC ブラウザでも見学できます（マウスで視点操作）。`?cam=x,
 - `assets/hands/` 手メッシュ（WebXR Input Profiles generic-hand, Apache-2.0）
 - `lib/` Three.js r160 本体と GLTFLoader / RoomEnvironment など（MIT）
 - `serve.py` — HTTPS 開発サーバー
-- `manifest.json` / `sw.js` / `icon.svg` — PWA（オフライン・単独起動）
+- `manifest.json` / `sw.js` / `icon.svg` / `icon-192.png` / `icon-512.png` — PWA（オフライン・単独起動、APK 化にも使う） / `dist/`・`senshiVR-pages.zip` — GitHub Pages にアップロードする一式
