@@ -2,7 +2,8 @@
 //  AVF: 手首の橈骨動脈–橈側皮静脈吻合（radiocephalic, 側端吻合）から肘・上腕へ向かう皮静脈ネットワーク
 //       橈側皮静脈（前腕・上腕）、肘正中皮静脈、尺側皮静脈、前腕正中皮静脈、
 //       動脈系: 上腕動脈 → 肘の 2 横指下で橈骨動脈・尺骨動脈に分岐、橈骨動脈は吻合部で静脈につながる。各動脈に伴走静脈 2 本（深部、圧迫でつぶれる）
-//       静脈の径は一様ではなく、太い所（怒張・瘤状）と細い所（狭窄）がある（毎回位置が変わる）。エコーで見ると狭窄部は細く映る
+//       静脈の径は一様ではなく、太い所（怒張・瘤状）と細い所（狭窄）がある（毎回位置が変わる）。エコーで見ると狭窄部は細く映る。
+//       各枝の基本径は駆血時（怒張）の値で、非駆血では setDilation で細くなる（橈側皮静脈 4.5mm → 3.2mm）
 //  AVG: 前腕 U 字ループグラフト
 // 皮静脈は皮膚からわずかに透けて見える半透明の筒として描画（深い血管モードでは非表示）。エコー用に線分リストも提供する
 import * as THREE from 'three';
@@ -16,8 +17,8 @@ export const AVF_ANASTOMOSIS = { x: C.WRIST_X - 0.028, theta: 0.5, depth: 0.0065
 
 // AVF の皮静脈・動脈。depth は皮膚表面から血管中心までの距離（deep モードは静脈をさらに深く）
 function avfBranches(deep) {
-  // 皮静脈の深さ（皮膚表面から血管中心まで）。標準では発達した静脈が皮膚からわずかに盛り上がって見える深さ、deep モードでは 1cm 強
-  const dv = r => deep ? 0.0105 : r - 0.0007;
+  // 皮静脈の深さ（皮膚表面から血管中心まで）: 駆血時の半径 + 0.8mm（怒張しても血管の上端は皮膚の下。エコーの上端で切れない）
+  const dv = r => deep ? 0.0105 : r + 0.0008;
   const W = C.WRIST_X, E = C.ELBOW_X, A = AVF_ANASTOMOSIS;
   const sd = dv(0.0045), su = dv(0.004), sm = dv(0.0035), sb = dv(0.0035), sa = dv(0.0025);
   const ana = P(A.x, A.theta, A.depth);
@@ -162,7 +163,9 @@ export function createVessel(type, opts = {}) {
   const rebuild = () => {
     for (const b of branches) {
       const n = Math.max(24, Math.round(b.len / 0.004));
-      b.mesh.geometry.dispose(); b.mesh.geometry = varTube(b.curve, n, b.rAt, 14);
+      // 表示用の筒は実際の径より 2.2mm 太い（皮膚の下 0.8mm にある静脈が、駆血で怒張すると皮膚から盛り上がって透けて見える。判定・エコーは rAt の径）
+      const rShow = (b.kind === 'vein' && !b.comitant) ? (t => b.rAt(t) + 0.0022) : b.rAt;
+      b.mesh.geometry.dispose(); b.mesh.geometry = varTube(b.curve, n, rShow, 14);
       if (b.lumen) { b.lumen.geometry.dispose(); b.lumen.geometry = varTube(b.curve, Math.max(24, Math.round(b.len / 0.006)), t => b.rAt(t) * 0.45, 8); }
     }
     geomVersion++;
@@ -175,7 +178,7 @@ export function createVessel(type, opts = {}) {
     for (const b of branches) if (b.kind === 'vein') b.scale = f;
     rebuild();
   }
-  function setRadius(r) { setDilation(type === 'avf' ? r / C.VESSEL_R_NORMAL : 1); }
+  function setRadius(r) { setDilation(type === 'avf' ? r / C.VESSEL_R_DILATED : 1); }   // 基本径 = 駆血時なので、非駆血では 1 未満
 
   // 穿刺部位
   const sites = { A: null, V: null };
@@ -250,7 +253,7 @@ export function createVessel(type, opts = {}) {
 
   return {
     type, cfg, deep, group, upperGroup, branches, sites, pickSites, setRadius, setDilation, closest, segments,
-    get radius() { return C.VESSEL_R_NORMAL * dilation; },
+    get radius() { return C.VESSEL_R_DILATED * dilation; },
     get dilation() { return dilation; },
     get version() { return geomVersion; },
     dispose() { for (const b of branches) { b.mesh.geometry.dispose(); b.lumen?.geometry.dispose(); } },

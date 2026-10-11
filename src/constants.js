@@ -7,7 +7,7 @@ export const ARM_Y = BED_TOP + CUSHION_H + ARM_R; // 前腕軸（肘側）の高
 export const SHOULDER = { x: -0.49, y: ARM_Y + 0.035, z: -0.68 };
 export const ELBOW_X = -0.08, WRIST_X = 0.30;
 export const WRIST_LIFT = 0.009;                  // 手首側がわずかに高い（前腕上面をほぼ水平に保つ）
-export const VESSEL_R_NORMAL = 0.0045, VESSEL_R_DILATED = 0.010;   // 自己血管（AVF）
+export const VESSEL_R_NORMAL = 0.0032, VESSEL_R_DILATED = 0.0045;   // 自己血管（AVF）の橈側皮静脈の半径: 非駆血 / 駆血（怒張）。vessel.js の各枝の基本径は駆血時の値
 export const GRAFT_R = 0.004;                                      // 人工血管（AVG）
 export const HEART_BPM = 72;
 // 器具カート天面中心と向き（yaw = -90°: カートの長辺（前面）が穿刺者側 -x を向く）

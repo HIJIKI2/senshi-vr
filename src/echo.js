@@ -8,7 +8,8 @@
 //    径は走行に沿って変わる（狭窄部は細く映る）。線分の継ぎ目が輪として映らないよう、表面までの符号付き距離が最小の線分だけで内腔/壁を決める
 //  - 針: 金属は高輝度の点（短軸）/ 線（長軸）+ 真下に伸びる黒い音響陰影。プラスチック外筒は 2 本の壁の線（短軸では輪）。ビームと直交するほど明瞭
 //  - スペックル（軸方向に細かく横方向に粗い粒状）、深部減衰、プローブが皮膚から浮いた列は信号なし（空気）
-//  - 押し込むと皮膚はレンズ面に密着したまま浅い組織が圧縮され（画像の上端は切れない）、静脈（伴走静脈も）は強く押すほど扁平化（軽い接触ではつぶれない）、動脈はつぶれない
+//  - 押し込むと皮膚はレンズ面に密着したまま浅い組織が圧縮され（画像の上端は切れない）、静脈（伴走静脈も）は強く押すほど扁平化（軽い接触ではつぶれない）、
+//    駆血で怒張した静脈はほとんどつぶれない、動脈はつぶれない
 // 走査面: 幅 38mm（リニア）、深さ 30mm。プローブの原点 = 音響レンズ面の中心、+y = 持ち手方向、-y = ビーム方向、x = 横方向
 import * as THREE from 'three';
 import * as C from './constants.js';
@@ -18,7 +19,7 @@ export const PROBE_W = 0.038, IMG_DEPTH = 0.03;
 export const PRESS_MAX = 0.005;   // レンズ面が皮膚に沈み込める最大量 [m]
 // 静脈の扁平化は押し込みに対して非線形: 軽く当てた程度（PRESS_MAX の 35% ≈ 1.7mm まで）ではつぶれず、強く押すほどつぶれて最大で 85% 扁平化。
 // 針先の確認（長軸）は軽い接触で、血管の同定（圧迫法）は強く押す、という使い分けができる
-export const veinFlatten = press => 0.85 * (t => t * t * (3 - 2 * t))(Math.min(1, Math.max(0, (press - 0.35) / 0.65)));
+export const veinFlatten = (press, turgor = 0) => 0.85 * (t => t * t * (3 - 2 * t))(Math.min(1, Math.max(0, (press - 0.35) / 0.65))) * (1 - 0.75 * turgor);
 
 const std = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, ...extra });
 function box(w, h, d, m, x = 0, y = 0, z = 0) { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); o.castShadow = true; o.receiveShadow = true; return o; }
@@ -79,7 +80,7 @@ const FRAG = /* glsl */`
 precision highp float;
 varying vec2 vUv;
 uniform vec3 uO, uX, uD;                 // レンズ面中心、横方向、ビーム方向（単位ベクトル）
-uniform float uW, uDepth, uTime, uPulse, uGain;
+uniform float uW, uDepth, uTime, uPulse, uGain, uTurgor;   // uTurgor: 駆血による静脈の怒張 0..1（怒張した静脈は圧迫してもほとんどつぶれない）
 uniform int uN;
 uniform vec4 uSegA[${NSEG}];             // 血管線分 始点 xyz, 始点半径
 uniform vec4 uSegB[${NSEG}];             // 終点 xyz, 種類 (0 静脈, 1 動脈, 2 グラフト) + 終点半径×10（小数部）
@@ -181,7 +182,7 @@ void main(){
     float rEff = r;
     if (kind > 0.5 && kind < 1.5) rEff *= 1.0 + 0.1 * uPulse;                   // 動脈の拍動
     vec3 v = Pt - q; float vd = dot(v, uD); vec3 vl = v - uD * vd;
-    float comp = (kind < 0.5) ? (1.0 - 0.85 * smoothstep(0.35, 1.0, press)) : 1.0;   // 静脈の圧迫（軽い接触ではつぶれず、強く押すほど扁平化）
+    float comp = (kind < 0.5) ? (1.0 - 0.85 * smoothstep(0.35, 1.0, press) * (1.0 - 0.75 * uTurgor)) : 1.0;   // 静脈の圧迫（軽い接触ではつぶれず、強く押すほど扁平化。駆血で怒張しているとほぼつぶれない）
     float de = sqrt(dot(vl, vl) + (vd / comp) * (vd / comp));
     float sd = de - rEff;
     if (sd < sdMin) { sdMin = sd; kMin = kind; specMin = abs(vd) / max(de, 1e-6); }
@@ -251,7 +252,7 @@ export function createEcho(renderer, T) {
   const z4 = n => Array.from({ length: n }, () => new THREE.Vector4());
   const uniforms = {
     uO: { value: new THREE.Vector3() }, uX: { value: new THREE.Vector3(1, 0, 0) }, uD: { value: new THREE.Vector3(0, -1, 0) },
-    uW: { value: PROBE_W }, uDepth: { value: IMG_DEPTH }, uTime: { value: 0 }, uPulse: { value: 0 }, uGain: { value: 1.0 },
+    uW: { value: PROBE_W }, uDepth: { value: IMG_DEPTH }, uTime: { value: 0 }, uPulse: { value: 0 }, uGain: { value: 1.0 }, uTurgor: { value: 0 },
     uN: { value: 0 }, uSegA: { value: z4(NSEG) }, uSegB: { value: z4(NSEG) },
     uNdlA: { value: z4(4) }, uNdlB: { value: z4(4) },
     uArmA: { value: z4(2) }, uArmB: { value: z4(2) }, uElbowX: { value: C.ELBOW_X },
@@ -285,7 +286,7 @@ export function createEcho(renderer, T) {
   screen.renderOrder = 1; img.renderOrder = 2; overlay.renderOrder = 3;
   api.tablet = tablet;
 
-  const state = { active: false, contact: false, press: 0, centerVein: null, depthMm: 0, diaMm: 0, frozen: false };
+  const state = { active: false, contact: false, press: 0, turgor: 0, centerVein: null, depthMm: 0, diaMm: 0, frozen: false };
   function drawUI() {
     const c = uic, W = ui.width, H = ui.height;
     c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
@@ -332,7 +333,7 @@ export function createEcho(renderer, T) {
     if (!state.active || !state.contact || !state.centerVein) { ovTex.needsUpdate = true; return; }
     const v = state.centerVein;
     const px = (0.5 + v.lateral / PROBE_W) * ov.width, py = (v.depthCenter / IMG_DEPTH) * ov.height;
-    const rx = v.r / PROBE_W * ov.width, ry = v.r * (1 - (v.kind === 'vein' ? veinFlatten(state.press) : 0)) / IMG_DEPTH * ov.height;
+    const rx = v.r / PROBE_W * ov.width, ry = v.r * (1 - (v.kind === 'vein' ? veinFlatten(state.press, state.turgor) : 0)) / IMG_DEPTH * ov.height;
     c.strokeStyle = v.kind === 'artery' ? '#e04a6a' : '#39c46a'; c.lineWidth = 3;
     c.beginPath(); c.ellipse(px, py, rx + 6, ry + 6, 0, 0, Math.PI * 2); c.stroke();
     c.fillStyle = c.strokeStyle; c.font = 'bold 22px sans-serif'; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
@@ -362,6 +363,7 @@ export function createEcho(renderer, T) {
   }
   api.setNeedle = (i, a, b, radius, intensity) => { uniforms.uNdlA.value[i].set(a.x, a.y, a.z, intensity); uniforms.uNdlB.value[i].set(b.x, b.y, b.z, radius); };
   api.clearNeedles = () => { for (const v of uniforms.uNdlA.value) v.w = 0; };
+  api.setTurgor = t => { state.turgor = t; uniforms.uTurgor.value = t; };   // 駆血による怒張（0..1）
 
   // ---- 毎フレーム: プローブ姿勢から画像を生成し、センターライン上の血管を計測
   const _f = new THREE.Vector3(), _q = new THREE.Vector3(), _ab = new THREE.Vector3(), _w = new THREE.Vector3();

@@ -48,12 +48,13 @@ const WRIST_CURL = { thumb: 0.6, index: 0.7, middle: 0.75, ring: 0.75, pinky: 0.
 const MAX_LIFT = 0.42;   // 前腕の持ち上げ上限（rad ≈ 24°）
 
 // ---------------------------------------------------------------- 設定（血管タイプ・針タイプ）と手順
-const config = { vessel: 'avf', needle: 'metal', deep: false };   // deep: 深い血管（透けて見えない。エコー下穿刺の練習）
+const config = { vessel: 'avf', needle: 'metal', deep: false, grab: 'hold' };   // deep: 深い血管（透けて見えない。エコー下穿刺の練習）, grab: 'hold' = トリガーを押している間だけ持つ / 'toggle' = トリガーで持つ・離すを切り替え
 {
   const qs = new URLSearchParams(location.search);
   if (C.VESSEL_TYPES[qs.get('vessel')]) config.vessel = qs.get('vessel');
   if (C.NEEDLE_TYPES[qs.get('needle')]) config.needle = qs.get('needle');
   if (qs.get('deep') === '1') config.deep = true;
+  if (qs.get('grab') === 'toggle') config.grab = 'toggle';
 }
 let STEPS = [];
 function buildSteps() {
@@ -441,6 +442,12 @@ function updateButtons(dt) {
 }
 
 function toggleSetting(name) {
+  if (name === 'grab') {   // 持ち方の切り替えは手順をリセットしない
+    config.grab = config.grab === 'hold' ? 'toggle' : 'hold';
+    updateSettingLabels();
+    addLog(config.grab === 'hold' ? '持ち方: トリガーを押している間だけ持つ' : '持ち方: トリガーで持つ／もう一度トリガーで離す（押し続け不要）', 'info');
+    return;
+  }
   if (name === 'vessel') config.vessel = config.vessel === 'avf' ? 'avg' : 'avf';
   else if (name === 'needle') config.needle = config.needle === 'metal' ? 'cannula' : 'metal';
   else config.deep = !config.deep;
@@ -453,6 +460,7 @@ function updateSettingLabels() {
   T.labels.vessel.draw('血管タイプ', config.vessel === 'avf' ? '自己血管\nAVF' : '人工血管\nAVG (U字)');
   T.labels.needle.draw('針タイプ', config.needle === 'metal' ? '金属翼状針' : 'カニューラ型\n留置針');
   T.labels.depth.draw('血管の深さ', config.deep ? '深い\n（エコー下）' : '標準');
+  T.labels.grab.draw('持ち方', config.grab === 'hold' ? 'トリガー\n押し続け' : 'トリガーで\n持つ/離す');
 }
 
 // ---------------------------------------------------------------- UI パネル
@@ -613,11 +621,14 @@ const headPos = out => camera.getWorldPosition(out);
 
 function onSqueezeStart(cs) {
   if (cs.held?.kind === 'needle' && cs.held.obj.userData.type === 'cannula' && cs.held.punctured) { withdrawStylet(cs.held, cs); return; }
+  if (cs.held || cs.wrist) return;   // 切り替えモードでは離すのはトリガーだけ
   onSelectStart(cs);
 }
 function onSelectStart(cs) {
   initAudio();
   cs.ctrl.getWorldPosition(_v);
+  // 切り替えモード: 何かを持っている（患者の手首を含む）ときのトリガーは「離す」
+  if (config.grab === 'toggle' && (cs.held || cs.wrist)) { releaseHeld(cs); return; }
   // トリガーで操作する対象（セット箱の開封。開封後は無効）。ボタン類は指で押し込む物理ボタン（updateButtons）
   if (cs.held) return;
   for (const it of interactables) {
@@ -878,6 +889,11 @@ function updateStethTube() {
 
 function onSelectEnd(cs) {
   if (cs.selectPressed || cs.squeezePressed) return;
+  if (config.grab === 'toggle') return;   // 切り替えモード: ボタンを離しても持ったまま（離すのはもう一度トリガー）
+  releaseHeld(cs);
+}
+// 持っている物（または患者の手首）を離す。離した場所に応じて置く・貼る・接続する・留置する
+function releaseHeld(cs) {
   if (cs.wrist) { cs.wrist = false; cs.lastPose = ''; return; }   // 手首を離す → 前腕はゆっくり下りる（loop）
   const tool = cs.held;
   if (!tool) return;
@@ -1228,6 +1244,17 @@ function selfTestGrab() {
       moveTo(fake, new THREE.Vector3(0.9, 1.3, 0.6)); fake.selectPressed = false; onSelectEnd(fake);
       log('テープを離すとカートへ戻る', tp.obj.parent === scene && tp.obj.position.distanceTo(tp.homePos) < 1e-6);
     }
+    // 持ち方「切り替え」モード: トリガーで持つ → ボタンを離しても持ったまま → もう一度トリガーで離す
+    {
+      const prev = config.grab; config.grab = 'toggle';
+      const t = tools.stethoscope;
+      moveTo(fake, t.obj.localToWorld(t.grabOffset.clone()));
+      fake.selectPressed = true; onSelectStart(fake); fake.selectPressed = false; onSelectEnd(fake);
+      const stillHeld = fake.held === t;
+      fake.selectPressed = true; onSelectStart(fake); fake.selectPressed = false; onSelectEnd(fake);
+      log('切り替えモード: 離しても保持 → 再トリガーで離す', stillHeld && fake.held === null && t.held === null, `: stillHeld=${stillHeld} after=${fake.held?.name ?? '(none)'}`);
+      config.grab = prev;
+    }
     const ng = results.filter(r => !r.ok);
     console.log(`[grabtest] ${results.length - ng.length}/${results.length} OK` + (ng.length ? '  NG: ' + ng.map(r => r.label).join(', ') : ''));
     state.info = `掴みテスト ${results.length - ng.length}/${results.length} OK` + (ng.length ? ' NG: ' + ng.map(r => r.label).join(', ') : ''); uiDirty = true;
@@ -1244,6 +1271,7 @@ function debugEcho(qs) {
   // at=ana: 吻合部（手首）、at=sten: V 側の枝の狭窄部、dx=: 部位から腕に沿ってずらす [m]
   const at = qs.get('at'), dx = Number(qs.get('dx') || 0);
   const siteFrom = (b, t) => { const p = b.curve.getPointAt(t); return { x: p.x, y: C.skinY(p.x, p.z), z: p.z, tangent: b.curve.getTangentAt(t) }; };
+  if (qs.get('tq') === '1') { state.tourniquetOn = true; state.vesselR = C.VESSEL_R_DILATED; P.vessel.setRadius(state.vesselR); }   // 駆血状態
   if (at === 'ana') s = siteFrom(P.vessel.branches.find(b => b.id === 'cephF'), 0.0);
   else if (at === 'bif') s = siteFrom(P.vessel.branches.find(b => b.id === 'radialA'), 0.0);   // 上腕動脈の分岐部
   else if (at === 'sten' && s.branch.sten) s = siteFrom(s.branch, s.branch.sten.t);
@@ -1453,6 +1481,7 @@ function updateEcho(dt, t, Tb) {
 }
 function updateEchoInner(probe, dt, t, Tb) {
   echo.setVessel(P.vessel, `${config.vessel}:${config.deep}:${P.vessel.version}`);
+  echo.setTurgor(config.vessel === 'avf' ? THREE.MathUtils.clamp((P.vessel.dilation - 0.72) / 0.28, 0, 1) : 0);   // 駆血で怒張した静脈は圧迫してもつぶれにくい
   echo.clearNeedles();
   let k = 0;
   for (const site of ['A', 'V']) {
