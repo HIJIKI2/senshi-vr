@@ -186,6 +186,11 @@ export function buildPatient(scene, T, vesselType = 'avf', vesselOpts = {}) {
     new THREE.MeshStandardMaterial({ color: 0x5a2a52, transparent: true, opacity: 0.7, roughness: 0.5 }));
   hematoma.scale.set(1.5, 0.3, 1); hematoma.visible = false; forearm.add(hematoma);
   api.hematoma = hematoma;
+  // 返血の皮下漏出（V 針が血管外のままポンプを回した）: 穿刺部が大きく腫れる
+  const swelling = new THREE.Mesh(new THREE.SphereGeometry(0.03, 20, 14),
+    new THREE.MeshPhysicalMaterial({ color: 0xd98a8f, transparent: true, opacity: 0.75, roughness: 0.5, clearcoat: 0.3 }));
+  swelling.scale.set(1.6, 0.45, 1.2); swelling.visible = false; forearm.add(swelling);
+  api.swelling = swelling;
 
   const cushion = new THREE.Mesh(roundedBoxGeo(1.05, C.CUSHION_H, 0.2, 0.012), new THREE.MeshPhysicalMaterial({ color: 0x8fb4d9, roughness: 0.45, clearcoat: 0.3, clearcoatRoughness: 0.4 }));
   cushion.position.set(0.02, C.BED_TOP + C.CUSHION_H / 2, C.ARM_Z); cushion.receiveShadow = true; cushion.castShadow = true; group.add(cushion);

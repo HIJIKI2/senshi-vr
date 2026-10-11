@@ -48,13 +48,12 @@ const WRIST_CURL = { thumb: 0.6, index: 0.7, middle: 0.75, ring: 0.75, pinky: 0.
 const MAX_LIFT = 0.42;   // 前腕の持ち上げ上限（rad ≈ 24°）
 
 // ---------------------------------------------------------------- 設定（血管タイプ・針タイプ）と手順
-const config = { vessel: 'avf', needle: 'metal', deep: false, grab: 'hold' };   // deep: 深い血管（透けて見えない。エコー下穿刺の練習）, grab: 'hold' = トリガーを押している間だけ持つ / 'toggle' = トリガーで持つ・離すを切り替え
+const config = { vessel: 'avf', needle: 'metal', deep: false };   // deep: 深い血管（透けて見えない。エコー下穿刺の練習）
 {
   const qs = new URLSearchParams(location.search);
   if (C.VESSEL_TYPES[qs.get('vessel')]) config.vessel = qs.get('vessel');
   if (C.NEEDLE_TYPES[qs.get('needle')]) config.needle = qs.get('needle');
   if (qs.get('deep') === '1') config.deep = true;
-  if (qs.get('grab') === 'toggle') config.grab = 'toggle';
 }
 let STEPS = [];
 function buildSteps() {
@@ -82,13 +81,13 @@ function buildSteps() {
   STEPS = [
     { id: 'hygiene',    label: '手指衛生（速乾性手指消毒薬）', hint: '右のカートの端（ベッドから遠い側の開始セット）にある手指消毒薬のポンプヘッドを、手（掌や指先）で押し込みます（標準予防策）。' },
     { id: 'gloves',     label: '手袋を装着（両手）', hint: '開始セットの手袋の箱から手袋を引き出し（トリガーで持つ）、反対の手に近づけるとその手に装着されます。もう一方の手も同様に。', requires: ['hygiene'] },
-    { id: 'auscult',    label: avg ? '聴診器でグラフト音を聴取' : '聴診器でシャント音を聴取', hint: 'カートの聴診器（チェストピース）を持ち、垂れ下がったイヤーチップを自分の頭に近づけて装着し、ダイアフラムを前腕の血管に当てて 3 秒間聴診します。' + (avg ? '' : '手首側（吻合部）ほど音が大きくなります。'), requires: ['gloves'] },
+    { id: 'auscult',    label: avg ? '聴診器でグラフト音を聴取' : '聴診器でシャント音を聴取', hint: 'カートの聴診器（チェストピース）をトリガーで持ち（持ったまま。離すときはもう一度トリガー）、垂れ下がったイヤーチップを自分の頭に近づけて装着し、ダイアフラムを前腕の血管に当てて 3 秒間聴診します。' + (avg ? '' : '手首側（吻合部）ほど音が大きくなります。'), requires: ['gloves'] },
     { id: 'palpate',    label: avg ? 'グラフトを触知（スリル・走行確認）' : 'シャント血管を触知（スリル）', hint: '何も持っていない手の人差し指で前腕の血管に触れます。拍動に同期した振動（スリル）を 2〜3 秒確認します。', requires: ['gloves'] },
     { id: 'open',       label: '穿刺セットを開封',           hint: '穿刺セットの箱に手を近づけてトリガーを引くと蓋が開きます。' },
     { id: 'sheet',      label: '滅菌シーツを腕の下に敷く',   hint: 'セット内の滅菌シーツ（緑）を持ち、患者の前腕の上で手を離すと腕の下に敷かれます。反対の手で患者の手首を持つ（トリガー）と前腕を持ち上げられるので、持ち上げて敷くとスムーズです。', requires: ['open'] },
     { id: 'disinfect',  label: '穿刺部をアルコール綿で消毒', hint: '開始セットのアルコール綿のパウチを持ち、反対の手で開封口に触れてトリガーを引くと破れます。もう一度トリガーで中の綿を取り出し、穿刺予定部位を中心に外側へ円を描くように（直径 5〜7cm）消毒します。乾燥を待ってから穿刺。', requires: ['sheet'] },
     ...(tq ? [{ id: 'tourniquet', label: '駆血帯を上腕に巻く', hint: '駆血帯を持ち、患者の上腕の上で手を離すと巻かれ、シャント血管が怒張します。駆血は 1 分以内に。', requires: ['disinfect'] }] : []),
-    ...(deep ? [{ id: 'echo', label: 'エコーで穿刺血管を描出（短軸で画面中央に）', hint: 'タブレットは手で持って見やすい所（ベッドの上や患者の体側に立て掛ける）に置けます。カートのプローブ（持ち手を握る）を持ち、ゼリーを付けたつもりで穿刺予定部位の皮膚に当てます。血管を横切る向き（短軸）で、血管の黒い円がセンターライン（画面上の▼）の下に来るようにプローブを動かし、深さ・径の表示を確認します（2 秒保持）。', requires: ['disinfect'] }] : []),
+    ...(deep ? [{ id: 'echo', label: 'エコーで穿刺血管を描出（短軸で画面中央に）', hint: 'タブレットは手で持って見やすい所（ベッドの上や患者の体側に立て掛ける）に置けます。カートのプローブをトリガーで持ち（持ったまま。離すときはもう一度トリガー）、ゼリーを付けたつもりで穿刺予定部位の皮膚に当てます。血管を横切る向き（短軸）で、血管の黒い円がセンターライン（画面上の▼）の下に来るようにプローブを動かし、深さ・径の表示を確認します（2 秒保持）。', requires: ['disinfect'] }] : []),
     ...per('V'), ...per('A'),
     ...(tq ? [{ id: 'tourniquetOff', label: '駆血帯を外す（両針の穿刺後・回路接続前）', hint: '両方の穿刺・固定が終わったら、上腕の駆血帯に手を近づけてトリガーを引いて外します。駆血したまま回路を接続しないこと。', requires: [lastA, lastV] }] : []),
     { id: 'connectA',   label: 'A針に血液回路（赤）を接続',  hint: '透析装置から垂れている赤い回路のコネクタを持ち、A針の' + (cannula ? 'ハブ後端（逆止弁付きなのでそのまま接続可）' : 'ルアーコネクタ（クランプは閉じた状態で）') + 'に合わせて離すと接続されます。', requires: [lastA, ...(tq ? ['tourniquetOff'] : [])] },
@@ -110,7 +109,7 @@ function resetState() {
     listenTime: 0, palpateTime: 0, setOpen: false, sheetPlaced: false, tourniquetOn: false, tourniquetAt: 0, tourniquetWarned: false,
     swabDistance: 0, swabPts: [], disinfected: false, vesselR: C.VESSEL_R_NORMAL, info: '',
     taped: { A: 0, V: 0 }, connected: { A: false, V: false }, bleed: { A: 0, V: 0 }, bleedLeak: { A: 0, V: 0 },
-    pumpOn: false, flowT: -1, flowDone: false, stethWorn: false, stethHint: false,
+    pumpOn: false, flowT: -1, flowDone: false, vLeak: false, stethWorn: false, stethHint: false,
     gloved: { right: false, left: false }, gloveWarned: false, liftedForSheet: false,
     echoTime: 0, echoUsed: false, arteryHit: false,
   });
@@ -133,7 +132,7 @@ function completeStep(id) {
   uiDirty = true;
 }
 function checkFinished() {
-  if (!state.finished && state.flowDone && STEPS.every(s => state.done[s.id])) {
+  if (!state.finished && state.flowDone && !state.vLeak && STEPS.every(s => state.done[s.id])) {
     state.finished = true; state.score = Math.max(0, state.score);
     addLog(`トレーニング終了  スコア ${state.score} 点`, 'ok');
   }
@@ -297,6 +296,7 @@ function registerTool(name, obj, o) {
     gripQuat: new THREE.Quaternion().setFromEuler(new THREE.Euler(...(o.gripEuler || [0, 0, 0]))),
     locked: !!o.locked, held: null, fixed: false, stuck: false, taped: false,
     grabOffset: new THREE.Vector3().fromArray(o.grabOffset || [0, 0, 0]), grabR: o.grabR || GRAB_DIST,   // 掴む判定の中心（ローカル）と半径（大きな器具用）
+    toggle: !!o.toggle,   // true: トリガーで持ち、もう一度トリガーで離す（長く使う器具）。false: トリガーを離した瞬間に離す
     punctured: false, inVessel: false, perforated: false, angle: 0, everFlash: false, flashDepth: 0, lastDepth: 0, styletOut: false, styletAnim: -1,
   };
   scene.add(obj);
@@ -342,7 +342,7 @@ function buildTools() {
   steth.chest.visible = false; steth.binaural.visible = false;
   steth.tube = new THREE.Mesh(new THREE.BufferGeometry(), steth.tubeMat); steth.tube.visible = false; steth.tube.frustumCulled = false; scene.add(steth.tube);
   scene.add(steth.binaural);
-  registerTool('stethoscope', steth.chest, { pos: tp(-0.17, 0.004, -0.1), rotY: yaw, gripPos: [0, -0.02, -0.07] });
+  registerTool('stethoscope', steth.chest, { pos: tp(-0.17, 0.004, -0.1), rotY: yaw, gripPos: [0, -0.02, -0.07], toggle: true });
   registerTool('tourniquet', makeTourniquet(T, P.tourniquet.r), { pos: tp(-0.25, 0, 0.17), rotY: yaw, gripPos: [0, -0.01, -0.07] });
   createNeedles();
 
@@ -357,7 +357,7 @@ function buildTools() {
   const holder = makeProbeHolder(); holder.position.fromArray(tp(-0.49, 0, 0.12)); holder.rotation.y = yaw; scene.add(holder);
   // 持ち方（リニアプローブの標準）: 先端近く（下側）を親指・人差し指・中指で軽く挟み、プローブは皮膚に垂直。小指側を患者に添えて支える。
   // → レンズ面は手の下（指先の少し先）で真下を向き、持ち手は手の中を上へ抜ける。走査面は手の前後方向（腕に向かって立てば短軸）
-  registerTool('probe', makeProbe(), { pos: tp(-0.49, 0.012, 0.12), rotY: yaw + Math.PI / 2, gripPos: [0, -0.075, -0.05], gripEuler: [0, Math.PI / 2, 0], kind: 'probe', grabOffset: [0, 0.09, 0], grabR: 0.16 });   // 持ち手の中ほどを掴む
+  registerTool('probe', makeProbe(), { pos: tp(-0.49, 0.012, 0.12), rotY: yaw + Math.PI / 2, gripPos: [0, -0.075, -0.05], gripEuler: [0, Math.PI / 2, 0], kind: 'probe', grabOffset: [0, 0.09, 0], grabR: 0.16, toggle: true });   // 持ち手の中ほどを掴む
   // iViz air のタブレットは固定せず、手で持って好きな所に置ける（ベッドの上、患者の体と腕の間に立て掛ける、カートの上など）
   registerTool('tablet', echo.tablet, { pos: tp(-0.47, 0.006, -0.12), quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, -Math.PI / 2, 0, 'YXZ')), gripPos: [0, 0.02, -0.12], gripEuler: [-0.35, 0, 0], kind: 'tablet', grabR: 0.2 });
   tools.tablet.obj.traverse(o => { if (o.isMesh) o.castShadow = true; });
@@ -442,12 +442,6 @@ function updateButtons(dt) {
 }
 
 function toggleSetting(name) {
-  if (name === 'grab') {   // 持ち方の切り替えは手順をリセットしない
-    config.grab = config.grab === 'hold' ? 'toggle' : 'hold';
-    updateSettingLabels();
-    addLog(config.grab === 'hold' ? '持ち方: トリガーを押している間だけ持つ' : '持ち方: トリガーで持つ／もう一度トリガーで離す（押し続け不要）', 'info');
-    return;
-  }
   if (name === 'vessel') config.vessel = config.vessel === 'avf' ? 'avg' : 'avf';
   else if (name === 'needle') config.needle = config.needle === 'metal' ? 'cannula' : 'metal';
   else config.deep = !config.deep;
@@ -460,7 +454,6 @@ function updateSettingLabels() {
   T.labels.vessel.draw('血管タイプ', config.vessel === 'avf' ? '自己血管\nAVF' : '人工血管\nAVG (U字)');
   T.labels.needle.draw('針タイプ', config.needle === 'metal' ? '金属翼状針' : 'カニューラ型\n留置針');
   T.labels.depth.draw('血管の深さ', config.deep ? '深い\n（エコー下）' : '標準');
-  T.labels.grab.draw('持ち方', config.grab === 'hold' ? 'トリガー\n押し続け' : 'トリガーで\n持つ/離す');
 }
 
 // ---------------------------------------------------------------- UI パネル
@@ -621,14 +614,14 @@ const headPos = out => camera.getWorldPosition(out);
 
 function onSqueezeStart(cs) {
   if (cs.held?.kind === 'needle' && cs.held.obj.userData.type === 'cannula' && cs.held.punctured) { withdrawStylet(cs.held, cs); return; }
-  if (cs.held || cs.wrist) return;   // 切り替えモードでは離すのはトリガーだけ
+  if (cs.held || cs.wrist) return;   // 持っている物を離すのはトリガーだけ
   onSelectStart(cs);
 }
 function onSelectStart(cs) {
   initAudio();
   cs.ctrl.getWorldPosition(_v);
-  // 切り替えモード: 何かを持っている（患者の手首を含む）ときのトリガーは「離す」
-  if (config.grab === 'toggle' && (cs.held || cs.wrist)) { releaseHeld(cs); return; }
+  // プローブ・聴診器（長く使う器具）はトリガーで持ち、もう一度トリガーで離す
+  if (cs.held?.toggle) { releaseHeld(cs); return; }
   // トリガーで操作する対象（セット箱の開封。開封後は無効）。ボタン類は指で押し込む物理ボタン（updateButtons）
   if (cs.held) return;
   for (const it of interactables) {
@@ -889,7 +882,7 @@ function updateStethTube() {
 
 function onSelectEnd(cs) {
   if (cs.selectPressed || cs.squeezePressed) return;
-  if (config.grab === 'toggle') return;   // 切り替えモード: ボタンを離しても持ったまま（離すのはもう一度トリガー）
+  if (cs.held?.toggle) return;   // プローブ・聴診器はボタンを離しても持ったまま（離すのはもう一度トリガー）
   releaseHeld(cs);
 }
 // 持っている物（または患者の手首）を離す。離した場所に応じて置く・貼る・接続する・留置する
@@ -908,12 +901,7 @@ function releaseHeld(cs) {
   }
   if (tool.kind === 'cotton' && state.disinfected) { returnHome(tool); tool.fixed = true; return; }   // 使用済みの綿は膿盆へ（再利用不可）
   if (tool.kind === 'tablet') { placeTablet(tool); haptic(cs, 0.3, 40); return; }                    // タブレットは離した場所に置く
-  if (tool.name === 'stethoscope') {
-    if (_v.distanceTo(tool.homePos) < 0.35 || !state.stethWorn) { returnHome(tool); return; }
-    // 装着したまま手を離す → チェストピースは胸元に垂れる
-    camera.add(tool.obj); tool.obj.position.set(0, -0.36, -0.12); tool.obj.rotation.set(-Math.PI / 2, 0, 0);
-    return;
-  }
+  if (tool.name === 'stethoscope') { returnHome(tool); return; }   // どこで離してもカートのトレイへ戻る（イヤーチップも外れる）
   if (tool.name === 'sheet') {
     const nearArm = Math.abs(_v.z - C.ARM_Z) < 0.25 && _v.x > C.ELBOW_X - 0.15 && _v.x < C.WRIST_X + 0.25 && _v.y < C.ARM_Y + 0.35;
     if (nearArm && !state.sheetPlaced) {
@@ -1082,7 +1070,8 @@ function startPump() {
     const ud = tools['needle' + site].obj.userData;
     if (ud.clamp && !ud.clampOpen) { penalty(5, `${site}針のクランプが閉じています（閉塞アラーム）`); return; }
   }
-  state.pumpOn = true; state.flowT = 0;
+  if (!tools.needleA?.inVessel) { penalty(10, 'A針の先端が血管内にないため脱血できません（脱血不良アラーム）。A針を刺し直してから運転'); haptic(controllers[0], 1, 300); return; }
+  state.pumpOn = true; state.flowT = 0; state.vLeak = false;
   room.setPumpRunning(true);
   addLog('血液ポンプ開始 → A針から血液が回路へ流れ始めました', 'ok');
   completeStep('pump');
@@ -1119,7 +1108,7 @@ function resetAll() {
     returnHome(t);
   }
   createNeedles();
-  P.sheetPlane.visible = false; P.hematoma.visible = false; P.clearDisinfect();
+  P.sheetPlane.visible = false; P.hematoma.visible = false; P.swelling.visible = false; P.clearDisinfect();
   P.vessel.pickSites();   // 穿刺部位は毎回変える
   buildSteps();
   P.setLift(0);
@@ -1156,6 +1145,7 @@ function demoState() {
     const conn = tools['conn' + site]; conn.obj.position.copy(n.obj.localToWorld(new THREE.Vector3(0, 0, ud.lineEndZ))); connectLine(conn);
     if (ud.clamp) toggleClamp(n);
   }
+  if (new URLSearchParams(location.search).get('leak') === '1') tools.needleV.inVessel = false;   // V 針が血管外のまま運転 → 漏れの確認
   startPump();
   const f = Number(new URLSearchParams(location.search).get('flow')); if (f > 0) state.flowT = f;
 }
@@ -1185,8 +1175,10 @@ function selfTestGrab() {
     let echoOk = null;
     if (got?.kind === 'probe') { echoOk = true; for (let i = 0; i < 5; i++) { updateEcho(0.016, i * 0.016, 60 / C.HEART_BPM); if (echoError) echoOk = false; } }
     fake.selectPressed = false; onSelectEnd(fake);
+    let stillHeldOk = true;
+    if (tool.toggle) { stillHeldOk = fake.held === tool; fake.selectPressed = true; onSelectStart(fake); fake.selectPressed = false; onSelectEnd(fake); }   // 長く使う器具: ボタンを離しても保持 → 再トリガーで離す
     const released = tool.held === null && tool.obj.parent !== fake.ctrl;
-    const ok = got === tool && attached && released && echoOk !== false;
+    const ok = got === tool && attached && released && stillHeldOk && echoOk !== false;
     log(label, ok, `: got=${got?.name ?? '(none)'} attached=${attached} released=${released}` + (echoOk === null ? '' : ` echo=${echoOk}`));
   };
   const run = () => {
@@ -1244,16 +1236,26 @@ function selfTestGrab() {
       moveTo(fake, new THREE.Vector3(0.9, 1.3, 0.6)); fake.selectPressed = false; onSelectEnd(fake);
       log('テープを離すとカートへ戻る', tp.obj.parent === scene && tp.obj.position.distanceTo(tp.homePos) < 1e-6);
     }
-    // 持ち方「切り替え」モード: トリガーで持つ → ボタンを離しても持ったまま → もう一度トリガーで離す
-    {
-      const prev = config.grab; config.grab = 'toggle';
-      const t = tools.stethoscope;
-      moveTo(fake, t.obj.localToWorld(t.grabOffset.clone()));
-      fake.selectPressed = true; onSelectStart(fake); fake.selectPressed = false; onSelectEnd(fake);
-      const stillHeld = fake.held === t;
-      fake.selectPressed = true; onSelectStart(fake); fake.selectPressed = false; onSelectEnd(fake);
-      log('切り替えモード: 離しても保持 → 再トリガーで離す', stillHeld && fake.held === null && t.held === null, `: stillHeld=${stillHeld} after=${fake.held?.name ?? '(none)'}`);
-      config.grab = prev;
+    // 駆血して血管内に留置した針は、駆血帯を外して静脈が細くなっても先端が血管内に残るか（A/V 両方）
+    if (config.vessel === 'avf') {
+      P.vessel.setRadius(C.VESSEL_R_DILATED);
+      for (const site of ['V', 'A']) {
+        const n = tools['needle' + site], s = P.vessel.sites[site];
+        P.group.add(n.obj);
+        const dir = s.tangent.clone(); dir.y = 0; dir.normalize(); if ((site === 'A') === (dir.x < 0)) dir.negate();
+        n.obj.position.set(s.x - dir.x * 0.012, C.skinY(s.x, s.z) + 0.004, s.z - dir.z * 0.012);
+        n.obj.quaternion.setFromEuler(new THREE.Euler(-0.35, Math.atan2(-dir.x, -dir.z), 0, 'YXZ'));
+        n.punctured = true; n.inVessel = true; layDownNeedle(n); n.stuck = true; P.forearm.attach(n.obj);
+      }
+      P.vessel.setRadius(C.VESSEL_R_NORMAL);
+      for (const site of ['V', 'A']) {
+        const n = tools['needle' + site], ud = n.obj.userData;
+        n.obj.updateMatrixWorld(true); n.obj.localToWorld(_v3.set(0, 0, ud.tipZ));
+        const cl = P.vessel.closest(_v3);
+        log(`駆血解除後も ${site}針の先端は血管内`, cl.d < cl.r && cl.kind === 'vein', `: 軸からの距離=${(cl.d * 1000).toFixed(1)}mm 半径=${(cl.r * 1000).toFixed(1)}mm`);
+        n.stuck = false; resetNeedleState(n); returnHome(n);
+      }
+      P.vessel.setRadius(C.VESSEL_R_NORMAL);
     }
     const ng = results.filter(r => !r.ok);
     console.log(`[grabtest] ${results.length - ng.length}/${results.length} OK` + (ng.length ? '  NG: ' + ng.map(r => r.label).join(', ') : ''));
@@ -1534,6 +1536,15 @@ function updateFlow(dt) {
     { dur: 1.0, fn: p => room.setMachineFill('mV2', p) },
     { dur: 2.5, fn: p => room.lines.setFill('V', p, false) },
     { dur: config.needle === 'metal' ? 1.0 : 0.01, fn: p => { const f = tools.needleV?.obj.userData.fill; if (f) f.set(Math.max(state.bleed.V, p), state.bleed.V < 0.5); } },
+    // V 針の先端が血管外: 返血が皮下に漏れて穿刺部が腫れる → 静脈圧上昇アラームでポンプ停止
+    { dur: 1.2, fn: p => {
+      const n = tools.needleV; if (!n || n.inVessel) return;
+      if (!state.vLeak) { state.vLeak = true; penalty(20, 'V針の先端が血管外: 返血が皮下に漏れて腫脹（静脈圧上昇アラーム → ポンプ停止）。抜針して圧迫し、再穿刺'); haptic(controllers[0], 1, 300); }
+      const ud = n.obj.userData; n.obj.localToWorld(_v3.set(0, 0, (ud.type === 'cannula' && n.styletOut) ? ud.cannulaTipZ : ud.tipZ));
+      const sw = P.swelling; sw.visible = true; sw.position.copy(P.forearm.worldToLocal(_v3.set(_v3.x, C.skinY(_v3.x, _v3.z) - 0.004, _v3.z)));
+      sw.scale.set(1.6 * p, 0.45 * p, 1.2 * p);
+      if (p >= 1) { state.pumpOn = false; room.setPumpRunning(false); state.flowDone = true; }
+    } },
   ];
   let t = state.flowT;
   for (const s of seq) {
@@ -1541,6 +1552,7 @@ function updateFlow(dt) {
     s.fn(1); t -= s.dur;
   }
   state.flowDone = true;
+  if (state.vLeak) return;
   addLog('血液回路が血液で満たされました（プライミング完了）→ 透析開始', 'ok');
   checkFinished();
 }

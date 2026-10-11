@@ -219,7 +219,7 @@ export function createTextures() {
     c.fillStyle = '#e8eef7'; c.font = 'bold 27px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
     c.fillText('設定（押して切り替え → リセット）', w / 2, h / 2);
   });
-  T.labels = { vessel: makeLabel(), needle: makeLabel(), depth: makeLabel(), grab: makeLabel() };
+  T.labels = { vessel: makeLabel(), needle: makeLabel(), depth: makeLabel() };
 
   T.pouch = make(512, 384, (c, w, h) => {              // 個包装アルコール綿のパウチ（アルミ蒸着フィルム + 青の印刷）
     const g = c.createLinearGradient(0, 0, w, h); g.addColorStop(0, '#cfd4da'); g.addColorStop(0.45, '#f6f7f9'); g.addColorStop(1, '#c3c9d0');
