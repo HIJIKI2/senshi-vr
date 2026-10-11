@@ -273,7 +273,8 @@ function init() {
   }
   if (qs.get('demo')) setTimeout(demoState, 500);
   if (qs.get('debug') === 'echo') setTimeout(() => debugEcho(qs), 600);   // プローブを腕に当てた状態（axis=short|long, needle=1）
-  if (qs.get('test') === 'grab') setTimeout(selfTestGrab, 800);          // 全器具の「掴む」自己テスト（結果はコンソールへ）
+  if (qs.get('test') === 'grab') setTimeout(selfTestGrab, 800);
+  if (qs.get('place') === 'probe') setTimeout(() => { const pr = tools.probe; pr.obj.position.set(0.5, 1.0, -0.95); pr.obj.rotation.set(0.4, 0.7, 0.3); placeProbe(pr); const o2 = tools.tablet; }, 600);   // プローブをベッドの上に置いた状態（確認用）          // 全器具の「掴む」自己テスト（結果はコンソールへ）
   if (qs.get('lift')) P.setLift(Number(qs.get('lift')));   // 前腕の持ち上げ確認（rad）
 
   window.addEventListener('resize', () => {
@@ -658,8 +659,19 @@ function onSelectStart(cs) {
     if (!ud.torn) { setPouchTorn(t.obj, true); haptic(cs, 0.5, 50); haptic(t.held, 0.3, 50); addLog('アルコール綿のパウチを開封しました → 中の綿を取り出す', 'info'); return; }
     if (!ud.taken) { takeSwab(cs, t); return; }
   }
-  // 指先が物理ボタンのすぐ近くなら「押す」意図とみなし、近くの器具を誤って掴まない
+  // 反対の手の甲に貼ったテープ: 手か指先がテープから 8cm 以内なら最優先で剥がす（近くに留置した針があっても針を掴み直さない）
   fingerTip(cs, _v3);
+  {
+    let bestT = null, bestD = 0.08;
+    for (const t of toolList) {
+      if (t.kind !== 'tape' || !t.onHand || t.onHand === cs || t.held) continue;
+      t.obj.getWorldPosition(_v2);
+      const d = Math.min(_v.distanceTo(_v2), _v3.distanceTo(_v2));
+      if (d < bestD) { bestD = d; bestT = t; }
+    }
+    if (bestT) { grab(cs, bestT); addLog('手の甲からテープを剥がしました → 針の上で離して固定', 'info'); return; }
+  }
+  // 指先が物理ボタンのすぐ近くなら「押す」意図とみなし、近くの器具を誤って掴まない
   for (const b of pressables) {
     b.cap.parent.localToWorld(_v2.copy(b.rest).add(b.topOffset));
     if (_v3.distanceTo(_v2) < b.hitR + 0.04) return;
@@ -676,7 +688,7 @@ function onSelectStart(cs) {
     if (t.held || t.fixed || t.locked || t.taped) continue;
     if (t.onHand === cs) continue;                       // 自分の手の甲に貼ったテープは反対の手で剥がす
     t.obj.localToWorld(_v2.copy(t.grabOffset));
-    const d = (t.onHand ? 0.06 : t.grabR) - _v.distanceTo(_v2);
+    const d = (t.onHand ? 0.06 : t.stuck ? 0.06 : t.grabR) - _v.distanceTo(_v2);   // 留置した針はハブのすぐ近くでだけ掴み直せる
     if (d > bestD) { best = t; bestD = d; }
   }
   if (best) grab(cs, best);
@@ -795,6 +807,25 @@ function placeTablet(tool) {
     addLog('タブレットを立てました（画面が自分を向くように置くと見やすい）', 'info');
   }
 }
+// プローブを離した所に置く: 広い面を下にして横たえる（持ち手の向きは手の向きを保つ）。置く面はカート・サイドテーブル・ベッド・患者の腕の皮膚・床。
+// プローブ立てから 15cm 以内で離したときは立てに戻す
+function placeProbe(tool) {
+  const o = tool.obj;
+  o.updateMatrixWorld(true);
+  const pos = o.getWorldPosition(new THREE.Vector3());
+  echo.setActive(false);
+  if (pos.distanceTo(tool.homePos) < 0.15) { returnHome(tool); addLog('プローブをプローブ立てに戻しました', 'info'); return; }
+  scene.attach(o); o.scale.setScalar(1);
+  let s = supportY(pos.x, pos.z);
+  const a = C.armAt(pos.x);
+  if (C.onArm(pos.x) && Math.abs(pos.z - a.z) < a.r && P.lift < 0.02) s = Math.max(s, C.skinY(pos.x, pos.z));
+  const h = new THREE.Vector3(0, 1, 0).applyQuaternion(o.getWorldQuaternion(new THREE.Quaternion())); h.y = 0;
+  if (h.lengthSq() < 1e-6) h.set(1, 0, 0); h.normalize();
+  const up = new THREE.Vector3(0, 1, 0), x = new THREE.Vector3().crossVectors(h, up).normalize();
+  o.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, h, up));   // z（厚み方向）= 上 → 広い面を下にして横たわる
+  o.position.set(pos.x, s + 0.0145, pos.z);
+  addLog('プローブを置きました（持ち上げるとエコーが再開します）', 'info');
+}
 // 駆血帯を外す: 装着位置から手に移る。両針の留置後ならステップ完了、途中なら警告
 function removeTourniquet(cs) {
   const tq = tools.tourniquet;
@@ -901,6 +932,7 @@ function releaseHeld(cs) {
   }
   if (tool.kind === 'cotton' && state.disinfected) { returnHome(tool); tool.fixed = true; return; }   // 使用済みの綿は膿盆へ（再利用不可）
   if (tool.kind === 'tablet') { placeTablet(tool); haptic(cs, 0.3, 40); return; }                    // タブレットは離した場所に置く
+  if (tool.kind === 'probe') { placeProbe(tool); haptic(cs, 0.3, 40); return; }                      // プローブも離した場所に置く（プローブ立ての近くなら立てに戻す）
   if (tool.name === 'stethoscope') { returnHome(tool); return; }   // どこで離してもカートのトレイへ戻る（イヤーチップも外れる）
   if (tool.name === 'sheet') {
     const nearArm = Math.abs(_v.z - C.ARM_Z) < 0.25 && _v.x > C.ELBOW_X - 0.15 && _v.x < C.WRIST_X + 0.25 && _v.y < C.ARM_Y + 0.35;
@@ -1188,6 +1220,18 @@ function selfTestGrab() {
     }
     const probe = tools.probe;
     for (const [label, off] of [['probe 持ち手 上端', [0, 0.15, 0]], ['probe 持ち手 下端', [0, 0.04, 0]], ['probe 先端 横 3cm', [0.03, 0.02, 0]]]) tryGrab(label, probe, probe.obj.localToWorld(new THREE.Vector3(...off)));
+    // プローブを立てから離れた所で離す → その場に置かれる（立てには戻らない）。立ての近くで離す → 立てに戻る
+    {
+      const pr = tools.probe;
+      grab(fake, pr);
+      moveTo(fake, new THREE.Vector3(0.5, 1.05, -0.95));
+      fake.selectPressed = true; onSelectStart(fake); fake.selectPressed = false; onSelectEnd(fake);   // 持っている → 再トリガーで離す
+      const w = pr.obj.getWorldPosition(new THREE.Vector3());
+      log('プローブは離した所に置かれる', pr.held === null && w.distanceTo(pr.homePos) > 0.3 && Math.abs(w.x - 0.5) < 0.1 && Math.abs(w.z + 0.95) < 0.1 && Math.abs(w.y - 1.03) < 0.1, `: pos=(${w.x.toFixed(2)}, ${w.y.toFixed(2)}, ${w.z.toFixed(2)})`);
+      grab(fake, pr); moveTo(fake, pr.homePos.clone().add(new THREE.Vector3(0, 0.05, 0)));
+      fake.selectPressed = true; onSelectStart(fake); fake.selectPressed = false; onSelectEnd(fake);
+      log('立ての近くで離すと立てに戻る', pr.held === null && pr.obj.position.distanceTo(pr.homePos) < 1e-6);
+    }
     // プローブと腕の接触: 手を皮膚の 2cm 下まで押し込んでも、レンズ面は皮膚から 3mm 以内に留まるか
     {
       const s = P.vessel.sites.V, a = C.armAt(s.x);
@@ -1229,10 +1273,14 @@ function selfTestGrab() {
       moveTo(fake2, tpos); fake2.selectPressed = true; onSelectStart(fake2); const selfGot = fake2.held; fake2.selectPressed = false; onSelectEnd(fake2);
       log('自分の手の甲のテープは掴まない', selfGot !== tp, `: got=${selfGot?.name ?? '(none)'}`);
       moveTo(fake2, new THREE.Vector3(0.3, 1.3, 0.3));
-      // 反対の手で剥がす
-      moveTo(fake, tp.obj.getWorldPosition(new THREE.Vector3()));
+      // 反対の手で剥がす（5cm 隣に留置した針があっても、針ではなくテープを取る）
+      const tpw = tp.obj.getWorldPosition(new THREE.Vector3());
+      const tn = registerTool('testStuck', makeNeedle(0xd9303a, 'metal'), { pos: [tpw.x + 0.05, tpw.y, tpw.z], rotY: 0, gripPos: [0, 0, 0], kind: 'needle', site: 'A' });
+      tn.stuck = true; tn.punctured = true; tn.inVessel = true;
+      moveTo(fake, tpw);
       fake.selectPressed = true; onSelectStart(fake);
-      log('テープを手の甲から剥がす', fake.held === tp && tp.obj.parent === fake.ctrl && !tp.onHand, `: got=${fake.held?.name ?? '(none)'}`);
+      log('テープを手の甲から剥がす（隣の留置針より優先）', fake.held === tp && tp.obj.parent === fake.ctrl && !tp.onHand, `: got=${fake.held?.name ?? '(none)'}`);
+      removeTool('testStuck');
       moveTo(fake, new THREE.Vector3(0.9, 1.3, 0.6)); fake.selectPressed = false; onSelectEnd(fake);
       log('テープを離すとカートへ戻る', tp.obj.parent === scene && tp.obj.position.distanceTo(tp.homePos) < 1e-6);
     }
