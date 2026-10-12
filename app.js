@@ -6,7 +6,7 @@ import * as C from './src/constants.js';
 import { createTextures } from './src/textures.js';
 import { buildRoom } from './src/room.js';
 import { buildPatient } from './src/patient.js';
-import { loadHand, gripPose } from './src/handmodel.js';
+import { loadHand, loadTrackedHand, gripPose } from './src/handmodel.js';
 import {
   makeStethoscopeSet, makeTourniquet, setTourniquetApplied, setTourniquetCoiled, makeNeedle, setClampOpen, setWingsFolded,
   makeTapeStrip, setTapeApplied, resetTape, makeConnector, makeSetBox, makeFoldedDrape, makeGauze,
@@ -110,7 +110,7 @@ function resetState() {
     swabDistance: 0, swabPts: [], disinfected: false, vesselR: C.VESSEL_R_NORMAL, info: '',
     taped: { A: 0, V: 0 }, connected: { A: false, V: false }, bleed: { A: 0, V: 0 }, bleedLeak: { A: 0, V: 0 },
     pumpOn: false, flowT: -1, flowDone: false, vLeak: false, stethWorn: false, stethHint: false,
-    gloved: { right: false, left: false }, gloveWarned: false, liftedForSheet: false,
+    gloved: { right: false, left: false }, gloveWarned: false, liftedForSheet: false, trackedNoticed: false,
     echoTime: 0, echoUsed: false, arteryHit: false,
   });
 }
@@ -528,6 +528,7 @@ function setupControllers() {
   for (let i = 0; i < 2; i++) {
     const ctrl = renderer.xr.getController(i);
     const grip = renderer.xr.getControllerGrip(i);
+    const xrHand = renderer.xr.getHand(i);   // ハンドトラッキング時の関節（Quest 3 など対応機種のみ。コントローラーでは使われない）
     const hands = {};
     for (const side of ['right', 'left']) {
       const h = loadHand(side, skinMat);   // 開始時は素手
@@ -537,12 +538,20 @@ function setupControllers() {
       const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.031, 0.033, 0.06, 20), skinMat); cuff.position.y = 0.1; holder.add(cuff);
       const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.037, 0.07, 20), new THREE.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.95 })); sleeve.position.y = 0.16; holder.add(sleeve);
       grip.add(holder);
-      hands[side] = { api: h, holder, cuff };
+      const tracked = loadTrackedHand(side, skinMat);   // 実際の手の形で動くモデル（ハンドトラッキング時）
+      tracked.group.visible = false; xrHand.add(tracked.group);
+      hands[side] = { api: h, holder, cuff, tracked };
     }
-    const cs = { ctrl, grip, hands, side: i === 0 ? 'right' : 'left', held: null, wrist: false, inputSource: null, lastPos: new THREE.Vector3(), selectPressed: false, squeezePressed: false, lastBeat: -1, byHold: 0, turned: false };
+    const cs = { ctrl, grip, xrHand, hands, side: i === 0 ? 'right' : 'left', tracked: false, held: null, wrist: false, inputSource: null, lastPos: new THREE.Vector3(), selectPressed: false, squeezePressed: false, lastBeat: -1, byHold: 0, turned: false };
     setHandSide(cs, cs.side);
-    ctrl.addEventListener('connected', e => { cs.inputSource = e.data; setHandSide(cs, e.data.handedness === 'left' ? 'left' : 'right'); });
-    ctrl.addEventListener('disconnected', () => { cs.inputSource = null; });
+    // 入力源がつながるたびに、コントローラーかハンドトラッキングかを自動で判定（Quest 3 でコントローラーを置いて手を出すと切り替わる。PICO などはコントローラーのみ）
+    ctrl.addEventListener('connected', e => {
+      cs.inputSource = e.data; cs.tracked = !!e.data.hand;
+      setHandSide(cs, e.data.handedness === 'left' ? 'left' : 'right');
+      if (cs.tracked && !state.trackedNoticed) { state.trackedNoticed = true; addLog('ハンドトラッキング: 親指と人差し指をつまむ = トリガー（持つ／離す）。ボタンは人差し指で押す。移動はスティックがないので歩いて近づく', 'info'); }
+    });
+    ctrl.addEventListener('disconnected', () => { cs.inputSource = null; cs.tracked = false; setHandSide(cs, cs.side); });
+    dolly.add(xrHand);
     ctrl.addEventListener('selectstart', () => { cs.selectPressed = true; onSelectStart(cs); });
     ctrl.addEventListener('selectend', () => { cs.selectPressed = false; onSelectEnd(cs); });
     ctrl.addEventListener('squeezestart', () => { cs.squeezePressed = true; onSqueezeStart(cs); });
@@ -555,13 +564,22 @@ function setupControllers() {
 }
 function setHandSide(cs, side) {
   cs.side = side;
-  cs.hands.right.holder.visible = side === 'right';
-  cs.hands.left.holder.visible = side === 'left';
-  cs.hand = cs.hands[side].api;
+  for (const s of ['right', 'left']) {
+    cs.hands[s].holder.visible = s === side && !cs.tracked;      // コントローラー: 握り姿勢の手（指の曲げは状況で変える）
+    cs.hands[s].tracked.group.visible = s === side && cs.tracked;   // ハンドトラッキング: 実際の手の形
+  }
+  cs.hand = cs.tracked ? cs.hands[side].tracked : cs.hands[side].api;
+  cs.lastPose = '';
 }
 function haptic(cs, intensity = 0.5, ms = 60) {
-  const act = cs.inputSource?.gamepad?.hapticActuators?.[0];
-  if (act?.pulse) act.pulse(intensity, ms);
+  // Quest: gamepad.hapticActuators[0].pulse()。他機種向けに vibrationActuator / playEffect も試す（ハンドトラッキング中は振動なし）
+  const gp = cs.inputSource?.gamepad; if (!gp) return;
+  const act = gp.hapticActuators?.[0] || gp.vibrationActuator;
+  if (!act) return;
+  try {
+    if (act.pulse) act.pulse(intensity, ms);
+    else if (act.playEffect) act.playEffect('dual-rumble', { duration: ms, strongMagnitude: intensity, weakMagnitude: intensity });
+  } catch (e) { /* 非対応 */ }
 }
 function fingerTip(cs, out) {
   const tip = cs.hand?.tips?.index;
@@ -580,6 +598,7 @@ function setGloved(side, on) {
   for (const cs of controllers) {
     const H = cs.hands[side];
     H.api.group.traverse(o => { if (o.isMesh) o.material = m; });
+    H.tracked.group.traverse(o => { if (o.isMesh) o.material = m; });
     H.cuff.material = m;
   }
 }
@@ -1246,6 +1265,20 @@ function selfTestGrab() {
       log('probe 皮膚で止まる', sink <= PROBE_PRESS_MAX + 0.0005 && sink >= -0.001, `: 沈み込み=${(sink * 1000).toFixed(1)}mm（上限 ${PROBE_PRESS_MAX * 1000}mm） contact=${probe.contact} hold=${!!probe.holdPos}`);
       fake.held = null; probe.held = null; probe.holdPos = probe.holdQuat = null; returnHome(probe);
     }
+    // 聴診器のダイアフラムも皮膚で止まるか（手を皮膚の 2cm 下まで押し込む）
+    {
+      const st = tools.stethoscope, s = P.vessel.sites.V, a = C.armAt(s.x);
+      moveTo(fake, new THREE.Vector3(s.x, s.y + 0.1, s.z));
+      grab(fake, st);
+      const hold = st.gripPos.clone().applyQuaternion(fake.ctrl.quaternion);
+      moveTo(fake, new THREE.Vector3(s.x, s.y - 0.02, s.z).sub(hold));
+      updateHeld(fake, st, 0.016);
+      st.obj.updateMatrixWorld(true);
+      const F = st.obj.localToWorld(STETH_FACE.clone());
+      const sink = a.r - Math.hypot(F.y - a.y, F.z - a.z);
+      log('聴診器 皮膚で止まる', sink <= 0.0015 && sink >= -0.001, `: 沈み込み=${(sink * 1000).toFixed(1)}mm`);
+      fake.held = null; st.held = null; returnHome(st);
+    }
     // 留置針の内筒抜去: 留置した（stuck）カニューラ針の (1) ハブから 8cm 離れた所でトリガー、(2) 針の掴み判定の中心でトリガー → 内筒が抜け、針は手に移らない
     {
       const s = P.vessel.sites.V;
@@ -1304,6 +1337,18 @@ function selfTestGrab() {
         n.stuck = false; resetNeedleState(n); returnHome(n);
       }
       P.vessel.setRadius(C.VESSEL_R_NORMAL);
+    }
+    // ハンドトラッキング用モデル: 関節の姿勢を与えると指先がそこへ動くか（実機なしで確認できる範囲）
+    {
+      const tr = controllers[0].hands.right.tracked;
+      const fakeHand = new THREE.Group(); fakeHand.joints = {};
+      let k = 0;
+      for (const name of Object.keys(tr.joints)) { const j = new THREE.Group(); j.position.set(0.3 + 0.01 * k, 1.2, -0.4 + 0.005 * k); j.visible = true; fakeHand.joints[name] = j; k++; }
+      const want = fakeHand.joints['index-finger-tip']?.position.clone();
+      tr.update(fakeHand); tr.group.updateMatrixWorld(true);
+      const got = tr.tips.index?.getWorldPosition(new THREE.Vector3());
+      const ok = tr.loaded && !!want && !!got && got.distanceTo(tr.group.localToWorld(want.clone())) < 1e-6;
+      log('ハンドトラッキング用モデル: 関節に追従', ok, `: loaded=${tr.loaded} joints=${Object.keys(tr.joints).length}`);
     }
     const ng = results.filter(r => !r.ok);
     console.log(`[grabtest] ${results.length - ng.length}/${results.length} OK` + (ng.length ? '  NG: ' + ng.map(r => r.label).join(', ') : ''));
@@ -1459,8 +1504,9 @@ function loop() {
     }
     const trig = gp?.buttons?.[0]?.value ?? (cs.selectPressed ? 1 : 0);
     const grip = gp?.buttons?.[1]?.value ?? (cs.squeezePressed ? 1 : 0);
-    // 何も持たずにトリガーを引く = 人差し指を立てた「ポインティング」姿勢（物理ボタンを押す指）
-    cs.pointing = !cs.held && !cs.wrist && trig > 0.5;
+    if (cs.tracked) cs.hand.update(cs.xrHand);   // ハンドトラッキング: 関節の姿勢を手のモデルへ
+    // 何も持たずにトリガーを引く = 人差し指を立てた「ポインティング」姿勢（物理ボタンを押す指）。ハンドトラッキングでは常に人差し指でボタンを押せる
+    cs.pointing = !cs.held && !cs.wrist && (cs.tracked || trig > 0.5);
     let pose;
     if (cs.held?.kind === 'needle') pose = 'pinch';
     else if (cs.held?.kind === 'probe') pose = 'probe';
@@ -1496,11 +1542,13 @@ const _ea = new THREE.Vector3(), _eb = new THREE.Vector3();
 // 腕の表面を滑る（手だけが腕の中へ進む）。皮膚に触れた瞬間に振動、押し込みすぎは小刻みな振動で知らせる
 const PROBE_PRESS_MAX = PRESS_MAX;
 const _pc = { f: new THREE.Vector3(), r: new THREE.Vector3(), q: new THREE.Quaternion(), d: new THREE.Vector3(), d2: new THREE.Vector3() };
-function updateProbeContact(cs, tool, dt) {
+// 腕に当てる器具の接触（プローブ・聴診器）: face = 器具ローカルでの接触面の中心、pressMax = 皮膚に沈み込める量
+const STETH_FACE = new THREE.Vector3(0, -0.0037, 0);   // 聴診器のダイアフラム面（チェストピース原点の下）
+function updateProbeContact(cs, tool, dt, face = null, pressMax = PROBE_PRESS_MAX) {
   const o = tool.obj;
   o.position.copy(tool.holdPos || tool.gripPos); o.quaternion.copy(tool.holdQuat || tool.gripQuat);   // 手の中の基準位置からやり直す（前フレームの押し戻しを持ち越さない）
   o.updateMatrixWorld(true);
-  const F = o.getWorldPosition(_pc.f);
+  const F = face ? o.localToWorld(_pc.f.copy(face)) : o.getWorldPosition(_pc.f);
   let contact = false, press = 0;
   if (C.onArm(F.x)) {
     const a = C.armAt(F.x);
@@ -1508,7 +1556,7 @@ function updateProbeContact(cs, tool, dt) {
     const dist = _pc.r.length();
     if (dist > 1e-4 && _pc.r.y > -0.2 * a.r) {                        // 腕の上半分〜側面（下から突き上げる場合は無視）
       if (dist < a.r + 0.0015) contact = true;
-      const minDist = a.r - PROBE_PRESS_MAX;
+      const minDist = a.r - pressMax;
       if (dist < minDist) {
         press = minDist - dist;                                        // 皮膚より深く押し込んだ量 → 押し戻す
         _pc.d.copy(_pc.r).normalize().multiplyScalar(press);
@@ -1625,6 +1673,7 @@ function updatePalpation(cs, dt, beat) {
 function updateHeld(cs, tool, dt) {
   const V = P.vessel;
   if (tool.name === 'stethoscope') {
+    updateProbeContact(cs, tool, dt, STETH_FACE, 0.001);   // ダイアフラムは皮膚で止まる（腕を貫通しない。1mm まで沈む）
     // 装着判定: 垂れ下がったイヤーチップ（バイノーラル原点）が頭に近づいたら耳に装着
     if (!state.stethWorn) {
       steth.binaural.getWorldPosition(_v2); headPos(_v3);

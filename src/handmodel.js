@@ -67,6 +67,39 @@ export function loadHand(side, material) {
   return api;
 }
 
+// ハンドトラッキング用: 同じ GLB を WebXR Hand Input の関節（25 個、手首を含む）の姿勢で直接動かす。
+// GLB の骨は平坦な階層（すべて Armature 直下）で、関節名は WebXR の jointName と同じなので、関節の位置・回転をそのまま骨に写す
+// （three.js の XRHandMeshModel と同じ方式）。api.update(xrHand) を毎フレーム呼ぶ。setCurl は無効（実際の手の形がそのまま映る）
+export const XR_JOINTS = ['wrist', ...Object.values(CHAINS).flat()];
+export function loadTrackedHand(side, material) {
+  const group = new THREE.Group();
+  const api = { group, side, tips: {}, bones: {}, joints: {}, loaded: false, tracked: true, curl: {}, setCurl: () => {} };
+  api.ready = new Promise(resolve => {
+    loader.load(`./assets/hands/${side}.glb`, gltf => {
+      const root = gltf.scene;
+      root.traverse(o => { if (o.isMesh) { o.material = material; o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
+      group.add(root);
+      for (const name of XR_JOINTS) { const b = root.getObjectByName(name); if (b) api.joints[name] = b; }
+      for (const [finger, names] of Object.entries(CHAINS)) {
+        api.bones[finger] = names.map(n => api.joints[n]).filter(Boolean);
+        api.tips[finger] = api.joints[names[names.length - 1]];
+      }
+      api.loaded = true;
+      resolve(api);
+    }, undefined, () => resolve(api));
+  });
+  // xrHand: renderer.xr.getHand(i)。joints[name] の position/quaternion（リファレンス空間）を骨へ写す
+  api.update = xrHand => {
+    if (!api.loaded || !xrHand?.joints) return;
+    for (const name of XR_JOINTS) {
+      const j = xrHand.joints[name], b = api.joints[name];
+      if (!j || !b || !j.visible) continue;
+      b.position.copy(j.position); b.quaternion.copy(j.quaternion);
+    }
+  };
+  return api;
+}
+
 // WebXR gripSpace（原点 = 握った指の中心, -Z = 親指方向, +X = 右手の甲, +Y = 前腕方向）に手首を合わせる姿勢
 export function gripPose(side) {
   const m = new THREE.Matrix4();
