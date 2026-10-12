@@ -189,10 +189,20 @@ void main(){
   }
   if (sdMin < 0.01) {
     bool art = kMin > 0.5 && kMin < 1.5, grf = kMin > 1.5;
-    float wallT = art ? 0.0006 : (grf ? 0.0007 : 0.00035);
-    float wallB = art ? 0.8 : (grf ? 0.9 : 0.5);
-    if (sdMin < -wallT * 0.5) { b = 0.012 + 0.03 * vnoise(Pt * 1500.0 + vec3(0.0, uTime * 0.6, 0.0)); if (!art && !grf) b += 0.015 * vnoise(Pt * 900.0 + uTime * 0.3); }   // 内腔（静脈はわずかな流動エコー）
-    else if (sdMin < wallT) { float spec = 0.4 + 0.6 * specMin; float edge = 1.0 - smoothstep(wallT * 0.6, wallT, sdMin); b = max(b, wallB * spec * edge); }   // 壁（前後壁が明るい）
+    if (grf) {
+      // PTFE グラフトの壁（double-track sign）: 内側と外側の 2 本の高輝度線に挟まれたやや暗い層（壁厚 約 0.9mm）。自己血管の薄い壁との違いが吻合部で分かる
+      if (sdMin < 0.0) b = 0.012 + 0.02 * vnoise(Pt * 1500.0 + vec3(0.0, uTime * 0.6, 0.0));
+      else if (sdMin < 0.0011) {
+        float spec = 0.5 + 0.5 * specMin;
+        float l1 = 1.0 - smoothstep(0.0, 0.00024, abs(sdMin - 0.00012)), l2 = 1.0 - smoothstep(0.0, 0.00024, abs(sdMin - 0.00088));
+        b = max(b, spec * max(0.95 * max(l1, l2), 0.28));
+      }
+    } else {
+      float wallT = art ? 0.0006 : 0.00035;
+      float wallB = art ? 0.8 : 0.5;
+      if (sdMin < -wallT * 0.5) { b = 0.012 + 0.03 * vnoise(Pt * 1500.0 + vec3(0.0, uTime * 0.6, 0.0)); if (!art) b += 0.015 * vnoise(Pt * 900.0 + uTime * 0.3); }   // 内腔（静脈はわずかな流動エコー）
+      else if (sdMin < wallT) { float spec = 0.4 + 0.6 * specMin; float edge = 1.0 - smoothstep(wallT * 0.6, wallT, sdMin); b = max(b, wallB * spec * edge); }   // 壁（前後壁が明るい）
+    }
   }
   b *= enh;
   // --- 針: 金属は高輝度の本体（短軸では点、長軸では細い線）と、その真下に伸びる針の幅の黒い音響陰影（深くなるにつれ徐々に薄れる）。

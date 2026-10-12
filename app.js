@@ -59,13 +59,13 @@ let STEPS = [];
 function buildSteps() {
   const avg = config.vessel === 'avg', cannula = config.needle === 'cannula';
   const vcfg = C.VESSEL_TYPES[config.vessel];
-  const target = avg ? '人工血管（U字グラフト）' : '怒張した血管';
+  const target = avg ? '人工血管（ループグラフト）' : '怒張した血管';
   const angle = `${vcfg.idealAngle[0]}〜${vcfg.idealAngle[1]}°`;
   const nd = C.NEEDLE_TYPES[config.needle].short;
-  const tq = vcfg.usesTourniquet, deep = config.deep && !avg;
+  const tq = vcfg.usesTourniquet, deep = config.deep;   // deep: 血管（グラフト）が外から見えず、エコーで探して穿刺する
   const needlePre = ['auscult', 'palpate', 'disinfect', ...(tq ? ['tourniquet'] : []), ...(deep ? ['echo'] : [])];
-  const siteLabel = site => P?.vessel?.sites?.[site]?.label || (avg ? (site === 'A' ? '手前側の脚（動脈側）' : '奥側の脚（静脈側）') : (site === 'A' ? '手首寄り' : '肘寄り'));
-  const needleHint = site => `${site === 'A' ? '赤い針（A）' : '青い針（V）'}を持ち、反対の手で皮膚を伸展・固定しながら「${siteLabel(site)}」の${deep ? '血管（透けて見えないのでエコーで位置と深さを確認）' : target}へ ${deep ? '30〜45°' : angle} で刺入。逆血（フラッシュバック）を確認したら針を寝かせて 2〜3mm 進め、トリガーを離すと針は刺さったまま留置されます。` + (deep ? '' : 'エコー（カートのプローブ）を当てると画面で血管の深さを確認できます。');
+  const siteLabel = site => P?.vessel?.sites?.[site]?.label || (avg ? (site === 'A' ? 'グラフト 動脈側の脚（母指側）' : 'グラフト 静脈側の脚（小指側）') : (site === 'A' ? '手首寄り' : '肘寄り'));
+  const needleHint = site => `${site === 'A' ? '赤い針（A）' : '青い針（V）'}を持ち、反対の手で皮膚を伸展・固定しながら「${siteLabel(site)}」の${deep ? (avg ? '人工血管（外からは見えないのでエコーで探して位置と深さを確認）' : '血管（透けて見えないのでエコーで位置と深さを確認）') : target}へ ${deep ? '30〜45°' : angle} で刺入。逆血（フラッシュバック）を確認したら針を寝かせて 2〜3mm 進め、トリガーを離すと針は刺さったまま留置されます。` + (deep ? '' : 'エコー（カートのプローブ）を当てると画面で血管の深さを確認できます。');
   const tapeHint = (cannula ? 'テープを持ち、留置した外筒のハブの上で離すと皮膚に密着させて固定されます（2 枚目はハブ後端）。' : 'テープを持ち、針の翼の上で離すと翼を皮膚に密着させて横一文字に固定されます（2 枚目はチューブの上に Ω 固定）。') + 'テープはカートから直接持つか、あらかじめ反対の手の甲（手袋の上）に貼っておき、穿刺後にそこから剥がして使えます。';
   // 穿刺は原則 V（返血側）から。A は V の固定が済んでから
   const per = site => cannula ? [
@@ -449,7 +449,7 @@ function toggleSetting(name) {
   P.setVesselType(config.vessel, { deep: config.deep });
   updateSettingLabels();
   resetAll();
-  addLog(`設定変更: ${C.VESSEL_TYPES[config.vessel].label} / ${C.NEEDLE_TYPES[config.needle].label}` + (config.deep && config.vessel === 'avf' ? ' / 深い血管（エコー下）' : ''), 'info');
+  addLog(`設定変更: ${C.VESSEL_TYPES[config.vessel].label} / ${C.NEEDLE_TYPES[config.needle].label}` + (config.deep ? ' / 深い血管（エコー下）' : ''), 'info');
 }
 function updateSettingLabels() {
   T.labels.vessel.draw('血管タイプ', config.vessel === 'avf' ? '自己血管\nAVF' : '人工血管\nAVG (U字)');
@@ -1412,6 +1412,8 @@ function debugEcho(qs) {
   if (qs.get('tq') === '1') { state.tourniquetOn = true; state.vesselR = C.VESSEL_R_DILATED; P.vessel.setRadius(state.vesselR); }   // 駆血状態
   if (at === 'ana') s = siteFrom(P.vessel.branches.find(b => b.id === 'cephF'), 0.0);
   else if (at === 'bif') s = siteFrom(P.vessel.branches.find(b => b.id === 'radialA'), 0.0);   // 上腕動脈の分岐部
+  else if (at === 'gaa') s = siteFrom(P.vessel.branches.find(b => b.id === 'graft'), 0.0);   // AVG 動脈側吻合部
+  else if (at === 'gva') s = siteFrom(P.vessel.branches.find(b => b.id === 'graft'), 1.0);   // AVG 静脈側吻合部
   else if (at === 'sten' && s.branch.sten) s = siteFrom(s.branch, s.branch.sten.t);
   else if (dx) s = siteFrom(s.branch, THREE.MathUtils.clamp(s.t + dx / s.branch.len, 0, 1));
   const fake = { ctrl: new THREE.Group(), grip: new THREE.Group(), side: 'right', hand: { loaded: false }, held: null, hands: controllers[0].hands };

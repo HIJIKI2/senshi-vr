@@ -4,7 +4,7 @@
 //       動脈系: 上腕動脈 → 肘の 2 横指下で橈骨動脈・尺骨動脈に分岐、橈骨動脈は吻合部で静脈につながる。各動脈に伴走静脈 2 本（深部、圧迫でつぶれる）
 //       静脈の径は一様ではなく、太い所（怒張・瘤状）と細い所（狭窄）がある（毎回位置が変わる）。エコーで見ると狭窄部は細く映る。
 //       各枝の基本径は駆血時（怒張）の値で、非駆血では setDilation で細くなる（橈側皮静脈 4.5mm → 3.2mm）
-//  AVG: 前腕 U 字ループグラフト
+//  AVG: 前腕ループグラフト（上腕動脈と尺側皮静脈に端側吻合。皮静脈・動脈系は AVF と共通）
 // 皮静脈は皮膚からわずかに透けて見える半透明の筒として描画（深い血管モードでは非表示）。エコー用に線分リストも提供する
 import * as THREE from 'three';
 import * as C from './constants.js';
@@ -14,9 +14,11 @@ const P = (x, th, d) => { const p = C.armPoint(x, th, d); return new THREE.Vecto
 
 // 吻合部（橈骨動脈–橈側皮静脈 側端吻合）の位置: 手首の母指側、皮膚から 6.5mm。皮膚の傷跡もここに置く
 export const AVF_ANASTOMOSIS = { x: C.WRIST_X - 0.028, theta: 0.5, depth: 0.0065 };
+// AVG の動脈側吻合部: 肘窩の上腕動脈（分岐の少し上）。グラフトはここから皮下へ上がる
+export const AVG_ARTERIAL_ANASTOMOSIS = [C.ELBOW_X + 0.02, -0.14, 0.0175];
 
-// AVF の皮静脈・動脈。depth は皮膚表面から血管中心までの距離（deep モードは静脈をさらに深く）
-function avfBranches(deep) {
+// 皮静脈（AVF/AVG 共通）。depth は皮膚表面から血管中心までの距離（deep モードは静脈をさらに深く）。avf=true のとき橈側皮静脈は吻合部から始まる
+function nativeVeins(deep, avf) {
   // 皮静脈の深さ（皮膚表面から血管中心まで）: 駆血時の半径 + 0.8mm（怒張しても血管の上端は皮膚の下。エコーの上端で切れない）
   const dv = r => deep ? 0.0105 : r + 0.0008;
   const W = C.WRIST_X, E = C.ELBOW_X, A = AVF_ANASTOMOSIS;
@@ -25,8 +27,8 @@ function avfBranches(deep) {
   return [
     // 橈側皮静脈: 吻合部から始まり（吻合部直後の「スイングセグメント」は少し深い）、前腕の母指側を肘へ
     { id: 'cephF', name: '前腕 橈側皮静脈', kind: 'vein', r: 0.0045, cannulate: true, forearm: true, pts: [
-      ana.clone(), P(W - 0.04, 0.56, (A.depth + sd) / 2), P(W - 0.06, 0.52, sd), P(W - 0.12, 0.42, sd), P(W - 0.19, 0.36, sd), P(W - 0.26, 0.38, sd), P(W - 0.32, 0.45, sd), P(E + 0.02, 0.52, sd), P(E - 0.02, 0.58, sd)],
-      rPts: [[0, 0.0038], [0.08, 0.0045], [1, 0.0045]] },
+      ...(avf ? [ana.clone(), P(W - 0.04, 0.56, (A.depth + sd) / 2)] : [P(W - 0.02, 0.6, sd)]), P(W - 0.06, 0.52, sd), P(W - 0.12, 0.42, sd), P(W - 0.19, 0.36, sd), P(W - 0.26, 0.38, sd), P(W - 0.32, 0.45, sd), P(E + 0.02, 0.52, sd), P(E - 0.02, 0.58, sd)],
+      rPts: avf ? [[0, 0.0038], [0.08, 0.0045], [1, 0.0045]] : null },
     { id: 'cephU', name: '上腕 橈側皮静脈', kind: 'vein', r: 0.004, cannulate: true, forearm: false, pts: [
       P(E - 0.02, 0.58, su), P(E - 0.07, 0.66, su), P(E - 0.13, 0.76, su), P(E - 0.2, 0.86, su + 0.001), P(E - 0.26, 0.95, su + 0.003)] },
     { id: 'mcv', name: '肘正中皮静脈', kind: 'vein', r: 0.0035, cannulate: true, forearm: false, pts: [
@@ -35,8 +37,25 @@ function avfBranches(deep) {
       P(W - 0.12, -0.7, sb), P(W - 0.22, -0.66, sb), P(E + 0.02, -0.6, sb + 0.001), P(E - 0.1, -0.56, sb + 0.002), P(E - 0.18, -0.6, sb + 0.006), P(E - 0.26, -0.66, sb + 0.011)] },
     { id: 'mav', name: '前腕正中皮静脈', kind: 'vein', r: 0.0025, cannulate: false, forearm: true, pts: [
       P(W - 0.05, -0.12, sa), P(W - 0.15, -0.16, sa), P(W - 0.25, -0.22, sa), P(E + 0.0, -0.3, sa + 0.001)] },
-    ...arterialTree(true),
   ];
+}
+function avfBranches(deep) { return [...nativeVeins(deep, true), ...arterialTree(true)]; }
+// AVG: 前腕ループグラフト（6mm PTFE）。動脈側は肘窩の上腕動脈（分岐の少し上）に端側吻合し、皮下（標準 5.5mm, deep 12mm）へ上がって
+// 母指側の脚を遠位へ、前腕中央で U ターンして小指側の脚を近位へ戻り、肘の尺側皮静脈に端側吻合する。各脚の長さ約 12cm、脚の間隔約 3.5cm
+export const AVG_SITE_X = { A: C.ELBOW_X + 0.11, V: C.ELBOW_X + 0.07 };   // 穿刺部位: A は動脈側の脚、V は静脈側の脚（間隔 5cm 以上）
+function avgBranches(deep) {
+  const E = C.ELBOW_X, gd = deep ? 0.012 : C.VESSEL_TYPES.avg.depth;
+  const sb = deep ? 0.0105 : 0.0035 + 0.0008;                           // 尺側皮静脈の深さ（nativeVeins と同じ式）
+  const AA = AVG_ARTERIAL_ANASTOMOSIS, VA = P(E + 0.02, -0.6, sb + 0.001);   // VA = 尺側皮静脈の制御点（曲線が必ず通る）
+  const tup = arr => arr.map(([x, th, d]) => P(x, th, d));
+  const pts = [
+    P(AA[0], AA[1], AA[2]), ...tup([[E + 0.035, 0.05, (AA[2] + gd) / 2], [E + 0.055, 0.38, gd], [E + 0.08, 0.45, gd], [E + 0.11, 0.45, gd], [E + 0.135, 0.42, gd],
+      [E + 0.15, 0.25, gd], [E + 0.158, 0.0, gd], [E + 0.15, -0.25, gd], [E + 0.135, -0.42, gd], [E + 0.11, -0.45, gd], [E + 0.08, -0.45, gd], [E + 0.055, -0.45, gd],
+      [E + 0.035, -0.55, (gd + sb) / 2]]), VA,
+  ];
+  return [...nativeVeins(deep, false),
+    { id: 'graft', name: '人工血管（ループグラフト）', kind: 'graft', r: C.GRAFT_R, cannulate: true, forearm: true, pts },
+    ...arterialTree(false)];
 }
 // 動脈系（AVF/AVG 共通）: 上腕動脈は肘窩のやや内側を下り、肘の 2 横指（約 3.5cm）下で橈骨動脈と尺骨動脈に分岐する。
 // 橈骨動脈は前腕の母指側を浅くなりながら手首へ（AVF では吻合部で静脈につながり、側端吻合なので手側へも続く）、尺骨動脈は小指側を手首へ。
@@ -44,7 +63,7 @@ function avfBranches(deep) {
 function arterialTree(withAnastomosis) {
   const W = C.WRIST_X, E = C.ELBOW_X, A = AVF_ANASTOMOSIS;
   const BIF = [E + 0.035, -0.12, 0.017];
-  const brachial = [[E - 0.26, -0.42, 0.022], [E - 0.14, -0.35, 0.02], [E - 0.05, -0.22, 0.019], [E + 0.005, -0.16, 0.018], BIF];
+  const brachial = [[E - 0.26, -0.42, 0.022], [E - 0.14, -0.35, 0.02], [E - 0.05, -0.22, 0.019], [E + 0.005, -0.16, 0.018], ...(withAnastomosis ? [] : [AVG_ARTERIAL_ANASTOMOSIS]), BIF];
   const radialProx = [BIF, [W - 0.25, 0.1, 0.0175], [W - 0.18, 0.24, 0.0155], [W - 0.12, 0.3, 0.014], [W - 0.06, 0.42, 0.010]];
   const radialDist = withAnastomosis
     ? [[W - 0.04, 0.47, 0.0078], [A.x, A.theta, A.depth], [W - 0.016, 0.53, 0.0085], [W + 0.002, 0.56, 0.011]]
@@ -76,16 +95,6 @@ const AVF_SITE_SETS = [
   { A: ['cephF', 0.2, '前腕 橈側皮静脈（手首寄り）'], V: ['mcv', 0.3, '肘正中皮静脈（外側）'] },
 ];
 
-function avgBranches() {
-  const cfg = C.VESSEL_TYPES.avg;
-  const xe = C.ELBOW_X + 0.005, xt = C.WRIST_X - 0.075, w = 0.021, pts = [];
-  const limb = (zOff, from, to) => { for (let i = 0; i <= 16; i++) { const x = from + (to - from) * i / 16; pts.push(new THREE.Vector3(x, 0, C.ARM_Z + zOff)); } };
-  limb(-w, xe, xt);
-  for (let i = 1; i < 12; i++) { const a = -Math.PI / 2 + Math.PI * i / 12; pts.push(new THREE.Vector3(xt + Math.cos(a) * w, 0, C.ARM_Z + Math.sin(a) * w)); }
-  limb(w, xt, xe);
-  for (const p of pts) p.y = C.skinY(p.x, p.z) - cfg.depth;
-  return [{ id: 'graft', name: '人工血管', kind: 'graft', r: C.GRAFT_R, cannulate: true, forearm: true, pts }, ...arterialTree(false)];
-}
 
 // 半径が走行に沿って変わるチューブ（TubeGeometry の可変半径版）。t は弧長パラメータ
 function varTube(curve, n, rAt, radial = 14) {
@@ -122,12 +131,13 @@ const lerpPts = (pts, t) => {
 
 export function createVessel(type, opts = {}) {
   const cfg = C.VESSEL_TYPES[type];
-  const deep = type === 'avf' && !!opts.deep;
-  const branches = type === 'avf' ? avfBranches(deep) : avgBranches();
+  const deep = !!opts.deep;
+  const branches = type === 'avf' ? avfBranches(deep) : avgBranches(deep);
   const group = new THREE.Group();         // 前腕側の血管（前腕を持ち上げると一緒に動く）
   const upperGroup = new THREE.Group();    // 上腕側の血管
   const veinMat = new THREE.MeshPhysicalMaterial({ color: 0x8a5f8e, roughness: 0.35, transparent: true, opacity: deep ? 0 : 0.62, clearcoat: 0.3, clearcoatRoughness: 0.4, depthWrite: false, side: THREE.DoubleSide });
-  const graftMat = new THREE.MeshPhysicalMaterial({ color: 0xe6ded5, roughness: 0.4, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide });
+  // グラフトは皮下にあり、皮膚の盛り上がり（皮膚色の畝）としてだけ見える。deep モードでは見えない（エコーで探す）
+  const graftMat = new THREE.MeshPhysicalMaterial({ color: 0xe8b9a2, roughness: 0.62, transparent: true, opacity: deep ? 0 : 0.95, depthWrite: false, sheen: 0.2, sheenColor: new THREE.Color(0xffd9c8) });
   const arteryMat = new THREE.MeshStandardMaterial({ color: 0xa83a3a, roughness: 0.5, transparent: true, opacity: 0.0, depthWrite: false });   // 動脈は深いので見えない（エコーのみ）
   const lumenMat = new THREE.MeshStandardMaterial({ color: 0x5a0d18, roughness: 0.6, transparent: true, opacity: deep ? 0 : 0.55, depthWrite: false });
 
@@ -136,7 +146,7 @@ export function createVessel(type, opts = {}) {
   for (const b of branches) {
     b.curve = new THREE.CatmullRomCurve3(b.pts, false, 'centripetal');
     b.len = b.curve.getLength();
-    b.scale = 1;                                  // 怒張（駆血）倍率（静脈のみ）
+    b.scale = (type === 'avg' && b.kind === 'vein') ? C.VESSEL_R_NORMAL / C.VESSEL_R_DILATED : 1;   // 怒張（駆血）倍率（静脈のみ。AVG は駆血しないので非駆血の径）
     b.sten = null;                                // 狭窄 { t, w (曲線パラメータ幅), f (狭窄率 0..1) }
     b.wave = { amp: 0, freq: 0, phase: 0 };       // 緩やかな径の変化（怒張部・細い部分）
     // 基本径（走行に沿った変化込み、怒張・狭窄なし）
@@ -164,7 +174,7 @@ export function createVessel(type, opts = {}) {
     for (const b of branches) {
       const n = Math.max(24, Math.round(b.len / 0.004));
       // 表示用の筒は実際の径より 2.2mm 太い（皮膚の下 0.8mm にある静脈が、駆血で怒張すると皮膚から盛り上がって透けて見える。判定・エコーは rAt の径）
-      const rShow = (b.kind === 'vein' && !b.comitant) ? (t => b.rAt(t) + 0.0022) : b.rAt;
+      const rShow = (b.kind === 'vein' && !b.comitant) ? (t => b.rAt(t) + 0.0022) : b.kind === 'graft' ? (t => b.rAt(t) + 0.0036) : b.rAt;
       b.mesh.geometry.dispose(); b.mesh.geometry = varTube(b.curve, n, rShow, 14);
       if (b.lumen) { b.lumen.geometry.dispose(); b.lumen.geometry = varTube(b.curve, Math.max(24, Math.round(b.len / 0.006)), t => b.rAt(t) * 0.45, 8); }
     }
@@ -217,7 +227,10 @@ export function createVessel(type, opts = {}) {
   function pickSites(seed) {
     const rand = rng(seed);
     if (type === 'avg') {
-      sites.A = siteAt('graft', 0.18, '手前側の脚（動脈側）'); sites.V = siteAt('graft', 0.82, '奥側の脚（静脈側）');
+      // 動脈側の脚（母指側, 0..0.5）と静脈側の脚（小指側, 0.5..1）で、指定の x に最も近い点
+      const g = branches.find(b => b.id === 'graft');
+      const tNear = (x, lo, hi) => { let best = lo, bd = 1; for (let i = 0; i <= 200; i++) { const t = lo + (hi - lo) * i / 200, d = Math.abs(g.curve.getPointAt(t).x - x); if (d < bd) { bd = d; best = t; } } return best; };
+      sites.A = siteAt('graft', tNear(AVG_SITE_X.A, 0.08, 0.45), 'グラフト 動脈側の脚（母指側）'); sites.V = siteAt('graft', tNear(AVG_SITE_X.V, 0.55, 0.92), 'グラフト 静脈側の脚（小指側）');
     } else {
       const set = AVF_SITE_SETS[(seed ?? Math.floor(rand() * AVF_SITE_SETS.length)) % AVF_SITE_SETS.length];   // ?seed=N で組み合わせを固定
       sites.A = siteAt(...set.A); sites.V = siteAt(...set.V);
