@@ -542,7 +542,10 @@ function setupControllers() {
       tracked.group.visible = false; xrHand.add(tracked.group);
       hands[side] = { api: h, holder, cuff, tracked };
     }
-    const cs = { ctrl, grip, xrHand, hands, side: i === 0 ? 'right' : 'left', tracked: false, held: null, wrist: false, inputSource: null, lastPos: new THREE.Vector3(), selectPressed: false, squeezePressed: false, lastBeat: -1, byHold: 0, turned: false };
+    // ハンドトラッキング時は、関節から作った「仮想の gripSpace / targetRay」を cs.grip / cs.ctrl として使う。
+    // コントローラー時と同じ座標系で器具を持たせるため（持つ位置・向きの計算は共通）
+    const vgrip = new THREE.Group(), vctrl = new THREE.Group(); vgrip.add(vctrl); dolly.add(vgrip);
+    const cs = { xrCtrl: ctrl, xrGrip: grip, ctrl, grip, vgrip, vctrl, xrHand, hands, side: i === 0 ? 'right' : 'left', tracked: false, held: null, wrist: false, inputSource: null, lastPos: new THREE.Vector3(), selectPressed: false, squeezePressed: false, lastBeat: -1, byHold: 0, turned: false };
     setHandSide(cs, cs.side);
     // 入力源がつながるたびに、コントローラーかハンドトラッキングかを自動で判定（Quest 3 でコントローラーを置いて手を出すと切り替わる。PICO などはコントローラーのみ）
     ctrl.addEventListener('connected', e => {
@@ -569,7 +572,31 @@ function setHandSide(cs, side) {
     cs.hands[s].tracked.group.visible = s === side && cs.tracked;   // ハンドトラッキング: 実際の手の形
   }
   cs.hand = cs.tracked ? cs.hands[side].tracked : cs.hands[side].api;
+  // 入力の切り替え中に持っていた物は置く（親の座標系が変わるため）
+  if (cs.held) { const t = cs.held; cs.held = null; t.held = null; t.holdPos = t.holdQuat = null; returnHome(t); }
+  cs.wrist = false;
+  if (cs.tracked) {
+    cs.ctrl = cs.vctrl; cs.grip = cs.vgrip;
+    // targetRay 相当のフレーム（gripSpace 基準）: -Z = 指先方向, +Y = 手の甲側。右手と左手で甲の向きが逆
+    const X = new THREE.Vector3(0, 0, side === 'right' ? 1 : -1), Y = new THREE.Vector3(side === 'right' ? 1 : -1, 0, 0), Z = new THREE.Vector3(0, 1, 0);
+    cs.vctrl.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
+  } else { cs.ctrl = cs.xrCtrl; cs.grip = cs.xrGrip; }
   cs.lastPose = '';
+}
+// ハンドトラッキング: 関節の位置から仮想の gripSpace を作る（原点 = 握りの中心（指の付け根の中点から手首側へ 1cm）,
+// -Y = 手首 → 中指の付け根の方向（指先方向）, -Z = 親指側（人差し指 → 小指の逆）, X = 残り（右手は甲、左手は掌）。コントローラーの gripSpace と同じ規約）
+const _vg = { w: new THREE.Vector3(), i: new THREE.Vector3(), k: new THREE.Vector3(), m: new THREE.Vector3(), x: new THREE.Vector3(), y: new THREE.Vector3(), z: new THREE.Vector3(), o: new THREE.Vector3(), mat: new THREE.Matrix4(), q: new THREE.Quaternion(), dq: new THREE.Quaternion() };
+function updateVirtualGrip(cs) {
+  const j = cs.hand.joints; if (!j?.wrist || !cs.hand.loaded) return;
+  j.wrist.getWorldPosition(_vg.w); j['index-finger-phalanx-proximal'].getWorldPosition(_vg.i); j['pinky-finger-phalanx-proximal'].getWorldPosition(_vg.k); j['middle-finger-phalanx-proximal'].getWorldPosition(_vg.m);
+  _vg.y.subVectors(_vg.w, _vg.m).normalize();                                   // +Y = 指先 → 手首
+  _vg.z.subVectors(_vg.k, _vg.i); _vg.z.addScaledVector(_vg.y, -_vg.z.dot(_vg.y)).normalize();   // +Z = 人差し指 → 小指（親指の反対）
+  _vg.x.crossVectors(_vg.y, _vg.z).normalize();
+  _vg.q.setFromRotationMatrix(_vg.mat.makeBasis(_vg.x, _vg.y, _vg.z));
+  _vg.o.addVectors(_vg.i, _vg.k).multiplyScalar(0.5).addScaledVector(_vg.y, 0.01);
+  cs.vgrip.position.copy(dolly.worldToLocal(_vg.o));
+  cs.vgrip.quaternion.copy(dolly.getWorldQuaternion(_vg.dq).invert().multiply(_vg.q));
+  cs.vgrip.updateMatrixWorld(true);
 }
 function haptic(cs, intensity = 0.5, ms = 60) {
   // Quest: gamepad.hapticActuators[0].pulse()。他機種向けに vibrationActuator / playEffect も試す（ハンドトラッキング中は振動なし）
@@ -1338,6 +1365,22 @@ function selfTestGrab() {
       }
       P.vessel.setRadius(C.VESSEL_R_NORMAL);
     }
+    // ハンドトラッキングの仮想 gripSpace: 回内位で指先が前（-z）、人差し指が -x 側の右手 → X（甲）= 上, Y = +z（手首方向）, Z = +x（小指側）
+    {
+      const cs0 = controllers[0], tr = cs0.hands.right.tracked;
+      const fakeHand = new THREE.Group(); fakeHand.joints = {};
+      const put = (name, x, y, z) => { const j = new THREE.Group(); j.position.set(x, y, z); j.visible = true; fakeHand.joints[name] = j; };
+      for (const name of Object.keys(tr.joints)) put(name, 0, 1, 0);
+      put('wrist', 0, 1, 0); put('middle-finger-phalanx-proximal', 0, 1, -0.1); put('index-finger-phalanx-proximal', -0.03, 1, -0.09); put('pinky-finger-phalanx-proximal', 0.03, 1, -0.09);
+      const prevHand = cs0.hand, prevTracked = cs0.tracked; cs0.hand = tr; cs0.tracked = true;
+      tr.update(fakeHand); tr.group.updateMatrixWorld(true); updateVirtualGrip(cs0);
+      const q = cs0.vgrip.getWorldQuaternion(new THREE.Quaternion());
+      const ax = v => v.applyQuaternion(q);
+      const X = ax(new THREE.Vector3(1, 0, 0)), Y = ax(new THREE.Vector3(0, 1, 0)), Z = ax(new THREE.Vector3(0, 0, 1)), o = cs0.vgrip.getWorldPosition(new THREE.Vector3());
+      const ok = X.y > 0.99 && Y.z > 0.99 && Z.x > 0.99 && Math.abs(o.z + 0.08) < 0.005;
+      log('ハンドトラッキングの仮想 gripSpace', ok, `: X=(${X.toArray().map(v => v.toFixed(2))}) Y=(${Y.toArray().map(v => v.toFixed(2))}) Z=(${Z.toArray().map(v => v.toFixed(2))}) origin z=${o.z.toFixed(3)}`);
+      cs0.hand = prevHand; cs0.tracked = prevTracked;
+    }
     // ハンドトラッキング用モデル: 関節の姿勢を与えると指先がそこへ動くか（実機なしで確認できる範囲）
     {
       const tr = controllers[0].hands.right.tracked;
@@ -1504,7 +1547,7 @@ function loop() {
     }
     const trig = gp?.buttons?.[0]?.value ?? (cs.selectPressed ? 1 : 0);
     const grip = gp?.buttons?.[1]?.value ?? (cs.squeezePressed ? 1 : 0);
-    if (cs.tracked) cs.hand.update(cs.xrHand);   // ハンドトラッキング: 関節の姿勢を手のモデルへ
+    if (cs.tracked) { cs.hand.update(cs.xrHand); cs.xrHand.updateMatrixWorld(true); updateVirtualGrip(cs); }   // ハンドトラッキング: 関節の姿勢を手のモデルへ、関節から仮想の握りフレームを更新
     // 何も持たずにトリガーを引く = 人差し指を立てた「ポインティング」姿勢（物理ボタンを押す指）。ハンドトラッキングでは常に人差し指でボタンを押せる
     cs.pointing = !cs.held && !cs.wrist && (cs.tracked || trig > 0.5);
     let pose;
@@ -1716,7 +1759,8 @@ function updateHeld(cs, tool, dt) {
   else if (tool.kind === 'cotton') {
     tool.obj.getWorldPosition(_v2);
     const aa = C.armAt(_v2.x);
-    const touching = P.lift < 0.02 && C.onArm(_v2.x) && Math.abs(_v2.z - aa.z) < aa.r * 0.9 && Math.abs(_v2.y - C.skinY(_v2.x, _v2.z)) < 0.03;
+    // 綿の底面の中心（器具の原点）が皮膚に触れている（皮膚から 8mm 以内。浮かせているときは消毒にならず、色も付かない）
+    const touching = P.lift < 0.02 && C.onArm(_v2.x) && Math.abs(_v2.z - aa.z) < aa.r * 0.8 && _v2.y > aa.y && Math.abs(_v2.y - C.skinY(_v2.x, _v2.z)) < 0.008;
     if (touching && !state.disinfected) {
       if (state.swabDistance === 0) requireGloves();
       cs.ctrl.getWorldPosition(_v);
