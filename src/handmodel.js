@@ -17,7 +17,7 @@ const loader = new GLTFLoader();
 
 export function loadHand(side, material) {
   const group = new THREE.Group();
-  const api = { group, side, tips: {}, bones: {}, loaded: false, curl: { thumb: 0.2, index: 0.2, middle: 0.2, ring: 0.2, pinky: 0.2 }, setCurl: () => {} };
+  const api = { group, side, tips: {}, bones: {}, joint: {}, loaded: false, curl: { thumb: 0.2, index: 0.2, middle: 0.2, ring: 0.2, pinky: 0.2 }, setCurl: () => {} };
   api.ready = new Promise(resolve => {
     loader.load(`./assets/hands/${side}.glb`, gltf => {
       const root = gltf.scene;
@@ -26,6 +26,7 @@ export function loadHand(side, material) {
       if (side === 'left') { const fix = new THREE.Group(); fix.rotation.x = -Math.PI / 2; fix.add(root); group.add(fix); }
       else group.add(root);
       const chains = {};
+      for (const name of XR_JOINTS) { const b = root.getObjectByName(name); if (b) api.joint[name] = b; }   // WebXR の関節名 → 骨（ハンドトラッキングとの整合確認用）
       for (const [finger, names] of Object.entries(CHAINS)) {
         const bones = names.map(n => root.getObjectByName(n));
         if (bones.some(b => !b)) continue;

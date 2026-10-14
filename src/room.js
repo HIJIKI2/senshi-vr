@@ -153,10 +153,10 @@ export function buildRoom(scene, T) {
   return {
     lines, pumpButton: machine.pumpButton, sanitizer: sani,
     setPumpRunning(on) { pumpRunning = on; T.dcsScreen.draw(on); },
-    // 装置内の回路の充填: stage = 'mA'（ピロー → ポンプ → ダイアライザー入口）, 'dialyzer'（下から上へ）, 'mV1'（出口 → チャンバー）, 'chamber'（液面）, 'mV2'（チャンバー → 気泡検出器 → 出口）
+    // 装置内の回路の充填: stage = 'mA'（気泡検出器 → ポンプ → 動脈側チャンバー → ダイアライザー入口）, 'dialyzer'（上から下へ）, 'mV1'（出口 → 静脈側チャンバー）, 'chamber'（静脈側チャンバーの液が血液に）, 'mV2'（チャンバー → 気泡検出器 → 出口）
     setMachineFill(stage, p) { machine.setFill(stage, p); },
     resetMachineFill() { for (const s of ['mA', 'dialyzer', 'mV1', 'chamber', 'mV2']) machine.setFill(s, 0); },
-    update(dt) { if (pumpRunning) for (const r of machine.rotors) r.rotation.y += dt * 4; },
+    update(dt) { if (pumpRunning) for (const r of machine.rotors) r.rotation.y -= dt * 4; },   // 前から見て時計回り（回路は左上から入って右側を回り左下へ）
   };
 }
 
@@ -188,189 +188,245 @@ function buildCurtain(T, x0, y0, z) {
   return m;
 }
 
-// 日機装 DCS-200Si を参考にした透析用監視装置（外形 W330×D465×H1345mm、ポール込み H1850mm）
-// 参考写真の特徴: 紺色の台座、白いスリムな本体、中段前縁の紺色デカール帯（DCS-200Si ロゴ）、前方へ傾いた白いコンソール
-// （紫がかった透明カバーの血液ポンプ・補液ポンプ、シリンジポンプ、チャンバーホルダー、気泡検出器）、紺ベゼルの 15 インチ
-// タッチパネル（下縁に操作ボタン列）、左前の点滴ポール。血液ポンプの運転は画面の「運転」キーで行う
+// 日機装 DCS-200Si を参考にした多用途透析用監視装置（実機写真を参照して作成）
+// 外観: 紺色の台座 + 4 輪キャスター、白い丸みのある本体。下部キャビネットの両側面に青い縦縞〜ドットの装飾帯、前面下部に DCS-200Si の銘板。
+// 前面は急角度（水平から約 65°）に傾いた白いコンソール面で、上から: シリンジポンプ（ヘパリン）、動脈側圧力ポッド接続部、静脈側チャンバーホルダー（左）、
+// 血液ポンプ（右上・紫がかった透明カバー、回路は左側から入って左側へ出る = 時計回り）、中央の返血/サンプルポート、ラインホルダー、
+// 気泡検出器 + 静脈クランプ（左下）、補液ポンプ（右下・小）、最下部に透析液カプラ（赤・青）のホルダー。
+// 上部に紺色ベゼルの 15 インチ タッチパネル（下縁に操作ボタン列: 電源・画面、NIKKISO ロゴ、警報ランプ、ボタン、赤い緊急停止）。
+// 左側面にポールクランプで点滴ポール（上端 2 本フック）を立て、ポールにダイアライザーホルダー（DLC-05）と動脈側チャンバーホルダーを取り付ける。
+// 血液回路（標準のチャンバー回路。導入施設の運転中の写真を参照）: A針 → 気泡検出器（A 側の溝）→ 血液ポンプ → 動脈側チャンバー（ポール上部・赤キャップ）→
+// ダイアライザー（赤キャップの上端から入り、青キャップの下端へ）→ 静脈側チャンバー（ポール下部・青キャップ）→ 気泡検出器（V 側の溝）+ 静脈クランプ → V針。
+// 気泡検出器には A・V の 2 本の回路が横並びで装着される。2 つのチャンバーは上から血液が入り下へ抜け、液面の上に少し空気があって気泡をトラップする。
+// 回路は治療時にはすでに液（生食）で満たされていて、ポンプ開始で血液に置き換わっていく。各チャンバーの上部からは圧モニターラインが装置のポートへ。
+// 透析液カプラは同じ色のキャップ側に接続（赤カプラ = 赤キャップ側の側面ポート、青 = 青側）。血液ポンプの運転は画面の「運転」キーで行う
 // ローカル座標: 前面 = +z（世界では +x を向くよう回転）、幅 = x
 function buildMachine(T, steel, chrome) {
   const g = new THREE.Group(); g.position.copy(MACHINE_POS); g.rotation.y = Math.PI / 2;
-  const white = std(0xf4f5f7, { roughness: 0.32 });
-  const whiteSoft = std(0xe8ebee, { roughness: 0.5 });
+  const white = std(0xf5f6f8, { roughness: 0.35 });
+  const whiteSoft = std(0xe9ecef, { roughness: 0.5 });
   const navy = std(0x1f2c52, { roughness: 0.5 });
   const grayL = std(0xd3d8de, { roughness: 0.5 });
+  const gray = std(0xaab1b9, { roughness: 0.5 });
   const dark = std(0x24272c, { roughness: 0.5 });
-  const cover = std(0x9b8fe0, { transparent: true, opacity: 0.42, roughness: 0.12 });   // 紫がかった透明カバー
-  const clear = std(0xffffff, { transparent: true, opacity: 0.4, roughness: 0.12 });
+  const cover = std(0x8d82e8, { transparent: true, opacity: 0.42, roughness: 0.08 });   // 紫がかった透明カバー
+  const clear = std(0xf4f7fa, { transparent: true, opacity: 0.35, roughness: 0.1 });
   const metal = std(0xc9cfd6, { metalness: 0.85, roughness: 0.3 });
-  const blue = std(0x3a7bd5, { roughness: 0.4 });
+  const red = std(0xd9303a, { roughness: 0.4 }), blue = std(0x2f6fd0, { roughness: 0.4 });
+  const hoseM = std(0xf2f2ee, { roughness: 0.5 });
 
-  // 台座（紺、H 形）とキャスター
-  g.add(rbox(0.5, 0.06, 0.6, 0.02, navy, 0, 0.055, 0));
-  g.add(rbox(0.3, 0.06, 0.62, 0.02, navy, 0, 0.055, 0));
-  for (const [x, z] of [[-0.21, -0.26], [0.21, -0.26], [-0.21, 0.26], [0.21, 0.26]]) {
-    const w = cyl(0.035, 0.035, 0.03, std(0x3a3f47), x, 0.035, z); w.rotation.x = Math.PI / 2; g.add(w);
-    g.add(box(0.03, 0.04, 0.045, std(0x8a9199), x, 0.055, z));
+  // 台座（紺。前後に脚が張り出す）と 4 輪キャスター
+  g.add(rbox(0.46, 0.05, 0.62, 0.02, navy, 0, 0.05, 0));
+  g.add(rbox(0.24, 0.05, 0.68, 0.02, navy, 0, 0.05, 0));
+  for (const [x, z] of [[-0.19, -0.29], [0.19, -0.29], [-0.19, 0.29], [0.19, 0.29]]) {
+    const w = cyl(0.038, 0.038, 0.03, std(0x33373d), x, 0.038, z); w.rotation.x = Math.PI / 2; g.add(w);
+    g.add(box(0.03, 0.04, 0.05, std(0x8a9199), x, 0.06, z));
   }
-  // 本体（白いスリムなタワー）。前面下部はスライド式パネル（薄いグレーの縁と目地）、側面に縦溝
-  g.add(rbox(0.33, 0.8, 0.46, 0.035, white, 0, 0.485, 0));
-  g.add(box(0.29, 0.62, 0.006, whiteSoft, 0, 0.44, 0.229));
-  g.add(box(0.006, 0.6, 0.006, grayL, 0, 0.44, 0.233));
-  g.add(box(0.29, 0.006, 0.006, grayL, 0, 0.76, 0.233));
-  for (const s of [-1, 1]) g.add(box(0.004, 0.55, 0.3, grayL, s * 0.166, 0.45, -0.03));
-  // 透析液カプラ・濃厚液ポート（下部前面）と白いホースのループ
-  for (const [x, c] of [[-0.09, 0x2f7fd0], [-0.04, 0xd9303a]]) g.add(cyl(0.011, 0.011, 0.03, std(c), x, 0.8, 0.24, 12).rotateX(Math.PI / 2));
-  for (const [x, zz] of [[-0.09, 0.26], [-0.04, 0.27]]) {
-    const pts = [[x, 0.8, zz], [x - 0.02, 0.6, zz + 0.05], [x - 0.03, 0.35, zz + 0.03], [x + 0.01, 0.25, zz - 0.02], [x + 0.06, 0.3, zz - 0.04], [x + 0.07, 0.6, zz - 0.03], [x + 0.05, 0.78, zz - 0.02]].map(p => new THREE.Vector3(...p));
-    g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.006, 8), std(0xf2f2ee, { roughness: 0.5 })));
+  // 下部キャビネット（白、丸み）。両側面に青い装飾帯、前面下部に DCS-200Si の銘板、側面の取っ手
+  g.add(rbox(0.40, 0.72, 0.50, 0.05, white, 0, 0.44, 0));
+  for (const sx of [-1, 1]) {
+    const band = new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.44), new THREE.MeshStandardMaterial({ map: T.dcsSide, roughness: 0.45 }));
+    band.position.set(sx * 0.2005, 0.42, 0.04); band.rotation.y = sx * Math.PI / 2; g.add(band);
   }
-  // 中段の棚（前へ張り出す）。前縁に紺色のデカール帯と DCS-200Si ロゴ
-  g.add(rbox(0.36, 0.075, 0.5, 0.025, white, 0, 0.905, 0.02));
-  const band = new THREE.Mesh(new THREE.PlaneGeometry(0.33, 0.044), new THREE.MeshStandardMaterial({ map: T.dcsBand, roughness: 0.4 }));
-  band.position.set(0, 0.905, 0.2705); g.add(band);
-  // 棚の上の透析液カプラ（赤・青のハンドル、ホルダーに掛けた状態）
-  const coupler = new THREE.Group(); coupler.position.set(-0.1, 0.96, 0.2);
-  coupler.add(box(0.07, 0.03, 0.04, grayL, 0, 0, 0));
-  coupler.add(cyl(0.012, 0.012, 0.05, std(0x2f7fd0, { roughness: 0.4 }), -0.018, 0.035, 0, 12));
-  coupler.add(cyl(0.012, 0.012, 0.05, std(0xd9303a, { roughness: 0.4 }), 0.018, 0.035, 0, 12));
-  g.add(coupler);
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.19, 0.036), new THREE.MeshStandardMaterial({ map: T.dcsLogo, transparent: true, roughness: 0.4 }));
+  plate.position.set(0.0, 0.2, 0.2505); g.add(plate);
+  const handle = cyl(0.008, 0.008, 0.22, grayL, 0.205, 0.95, 0.06, 10); handle.rotation.x = Math.PI / 2; g.add(handle);
+  for (const z of [-0.05, 0.17]) g.add(box(0.03, 0.016, 0.016, grayL, 0.19, 0.95, z));
+  // 透析液カプラ用のポート（前面下部）: 赤 = 供給、青 = 排液。ここからホースがダイアライザーのカプラへ
+  for (const [x, m] of [[-0.07, red], [-0.02, blue]]) { const c = cyl(0.011, 0.011, 0.03, m, x, 0.7, 0.25, 12); c.rotation.x = Math.PI / 2; g.add(c); }
 
-  // コンソール（前方へ約 40° 傾いた白いデッキ）。デッキローカル: +y = デッキ法線、+z = 手前（下）側
-  const deck = new THREE.Group(); deck.position.set(0, 1.07, 0.03); deck.rotation.x = 0.72;
-  deck.add(rbox(0.34, 0.1, 0.44, 0.035, white, 0, 0, 0));
-  const top = 0.05;
-  // 血液ポンプ（右下、大）: 金属ローラー・ローター、紫がかった透明ドームカバー、ラッチ
-  const bpX = 0.075, bpZ = 0.1;
-  deck.add(cyl(0.072, 0.075, 0.016, grayL, bpX, top + 0.008, bpZ, 40));
-  deck.add(cyl(0.06, 0.06, 0.02, dark, bpX, top + 0.02, bpZ, 40));
-  const rotor = new THREE.Group(); rotor.position.set(bpX, top + 0.034, bpZ);
-  rotor.add(cyl(0.02, 0.02, 0.018, metal, 0, 0, 0, 24));
-  for (const a of [0, Math.PI / 2]) { const bar = box(0.1, 0.014, 0.012, std(0x9aa1a8, { metalness: 0.8, roughness: 0.3 })); bar.rotation.y = a; rotor.add(bar); }
-  for (const a of [Math.PI / 4, -Math.PI / 4, Math.PI * 3 / 4, -Math.PI * 3 / 4]) rotor.add(cyl(0.013, 0.013, 0.02, metal, Math.cos(a) * 0.045, 0, Math.sin(a) * 0.045, 12));
+  // 上部シェル（コンソールを抱える丸い本体上部）
+  g.add(rbox(0.46, 0.46, 0.40, 0.07, white, 0, 0.99, -0.07));
+  // コンソール面（デッキ）: 法線が前上方（水平から 25° 上向き）。デッキローカル: +y = 面の法線、+z = 面に沿って下（手前）、x = 幅
+  const deck = new THREE.Group(); deck.position.set(0, 0.98, 0.115); deck.rotation.x = 1.13;
+  deck.add(rbox(0.46, 0.08, 0.52, 0.03, white, 0, 0, 0));
+  const top = 0.04;
+  // --- 上段: シリンジポンプ（ヘパリン。横向きのレールにシリンジ、スライダー、固定ノブ）
+  deck.add(rbox(0.24, 0.028, 0.05, 0.008, whiteSoft, 0.01, top + 0.014, -0.2));
+  deck.add(box(0.2, 0.006, 0.006, metal, 0.01, top + 0.03, -0.2));
+  deck.add(cyl(0.0085, 0.0085, 0.09, std(0xffffff, { transparent: true, opacity: 0.55, roughness: 0.15 }), -0.045, top + 0.034, -0.2, 14).rotateZ(Math.PI / 2));   // ヘパリンのシリンジ
+  deck.add(cyl(0.004, 0.004, 0.11, grayL, -0.03, top + 0.034, -0.2, 10).rotateZ(Math.PI / 2));
+  deck.add(box(0.012, 0.03, 0.03, whiteSoft, 0.01, top + 0.035, -0.2));
+  deck.add(rbox(0.04, 0.03, 0.036, 0.006, grayL, 0.09, top + 0.035, -0.2));
+  deck.add(cyl(0.01, 0.01, 0.018, dark, -0.1, top + 0.037, -0.2, 16));
+  // 圧モニターポート（左上: 動脈圧 = 赤、その下: 静脈圧 = 青）。各チャンバー上部からの細いモニターラインがここにつながる
+  for (const [z, m] of [[-0.14, red], [-0.08, blue]]) {
+    deck.add(cyl(0.014, 0.016, 0.012, grayL, -0.15, top + 0.006, z, 24));
+    deck.add(cyl(0.005, 0.005, 0.016, m, -0.15, top + 0.016, z, 10));
+    deck.add(cyl(0.009, 0.009, 0.006, whiteSoft, -0.15, top + 0.025, z, 14));
+  }
+  // 左中: 回路ガイド（白いパッド + 2 本のクリップ）
+  deck.add(rbox(0.06, 0.012, 0.05, 0.01, whiteSoft, -0.15, top + 0.006, 0.0));
+  for (const x of [-0.165, -0.135]) deck.add(box(0.012, 0.012, 0.03, grayL, x, top + 0.014, 0.0));
+  // 血液ポンプ（右上・大）: 白い円形の座、回転ローター（金属ローラー 2 本）、紫がかった透明カバー。回路は左側の切り欠きから入り、左側へ出る
+  const bpX = 0.12, bpZ = -0.11;
+  deck.add(cyl(0.078, 0.082, 0.014, grayL, bpX, top + 0.007, bpZ, 40));
+  deck.add(cyl(0.066, 0.066, 0.014, dark, bpX, top + 0.014, bpZ, 40));
+  const rotor = new THREE.Group(); rotor.position.set(bpX, top + 0.03, bpZ);
+  rotor.add(cyl(0.028, 0.03, 0.018, white, 0, 0, 0, 28));
+  for (const a of [0, Math.PI]) { const arm = box(0.05, 0.012, 0.016, std(0xe6e9ed, { roughness: 0.4 })); arm.rotation.y = a; arm.position.set(Math.cos(a) * 0.03, 0, -Math.sin(a) * 0.03); rotor.add(arm); }
+  for (const a of [0, Math.PI]) rotor.add(cyl(0.011, 0.011, 0.02, metal, Math.cos(a) * 0.052, 0, -Math.sin(a) * 0.052, 14));
   deck.add(rotor);
-  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.078, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), cover); dome.scale.set(1, 0.5, 1); dome.position.set(bpX, top + 0.014, bpZ); deck.add(dome);
-  deck.add(box(0.04, 0.012, 0.016, blue, bpX, top + 0.014, bpZ + 0.085));
-  deck.add(cyl(0.004, 0.004, 0.03, clear, bpX + 0.075, top + 0.03, bpZ, 8).rotateZ(Math.PI / 2));
-  // 補液ポンプ（右上、小）
-  const spX = 0.07, spZ = -0.135;
-  deck.add(cyl(0.05, 0.052, 0.014, grayL, spX, top + 0.007, spZ, 32));
-  deck.add(cyl(0.04, 0.04, 0.016, dark, spX, top + 0.016, spZ, 32));
-  const rotor2 = new THREE.Group(); rotor2.position.set(spX, top + 0.028, spZ);
-  rotor2.add(cyl(0.012, 0.012, 0.014, metal, 0, 0, 0, 16));
-  for (const a of [0, Math.PI / 2]) { const bar = box(0.06, 0.01, 0.009, std(0x9aa1a8, { metalness: 0.8, roughness: 0.3 })); bar.rotation.y = a; rotor2.add(bar); }
+  deck.add(rbox(0.16, 0.035, 0.15, 0.02, cover, bpX, top + 0.034, bpZ));
+  deck.add(box(0.012, 0.03, 0.08, grayL, bpX - 0.085, top + 0.03, bpZ));                                           // 左側のヒンジ
+  deck.add(cyl(0.006, 0.006, 0.002, red, bpX - 0.065, top + 0.053, bpZ - 0.045, 12));                               // 「A」の赤い印
+  deck.add(box(0.03, 0.01, 0.012, blue, bpX + 0.03, top + 0.053, bpZ + 0.065));                                     // ラッチ
+  // 中央: 返血/サンプルポート（丸い座にキャップ）と小さなライン固定具
+  deck.add(cyl(0.02, 0.022, 0.014, white, 0.0, top + 0.007, -0.02, 24));
+  deck.add(cyl(0.009, 0.009, 0.016, grayL, 0.0, top + 0.02, -0.02, 14));
+  deck.add(rbox(0.03, 0.01, 0.03, 0.004, whiteSoft, -0.06, top + 0.005, 0.03));
+  // 右中: ラインホルダー（白い角丸のパッド）、右端のクリップ
+  deck.add(rbox(0.07, 0.012, 0.05, 0.01, whiteSoft, 0.16, top + 0.006, 0.01));
+  deck.add(rbox(0.05, 0.02, 0.03, 0.006, white, 0.17, top + 0.01, 0.07));
+  deck.add(box(0.03, 0.004, 0.004, dark, 0.17, top + 0.021, 0.07));
+  // 左中: 補液ラインホルダー（溝付きのパッド）
+  deck.add(rbox(0.07, 0.012, 0.05, 0.01, whiteSoft, -0.15, top + 0.006, 0.09));
+  deck.add(box(0.05, 0.004, 0.006, dark, -0.15, top + 0.012, 0.09));
+  // 気泡検出器 + 静脈クランプ（左下）: 白いブロックに縦の溝が 2 本横並び（左 = 動脈側、右 = 静脈側の回路を通して気泡を監視）、静脈側の溝の下部がクランプ
+  const BD = { x: -0.11, z: 0.15, ax: -0.128, vx: -0.092 };
+  deck.add(rbox(0.11, 0.045, 0.1, 0.012, white, BD.x, top + 0.022, BD.z));
+  for (const [x, m] of [[BD.ax, red], [BD.vx, blue]]) { deck.add(box(0.008, 0.046, 0.1, dark, x, top + 0.023, BD.z)); deck.add(box(0.012, 0.002, 0.006, m, x, top + 0.046, BD.z - 0.052)); }
+  deck.add(box(0.03, 0.016, 0.02, dark, BD.vx, top + 0.045, BD.z + 0.035));
+  // 補液ポンプ（右下・小）
+  const spX = 0.14, spZ = 0.16;
+  deck.add(cyl(0.052, 0.055, 0.012, grayL, spX, top + 0.006, spZ, 32));
+  deck.add(cyl(0.042, 0.042, 0.012, dark, spX, top + 0.012, spZ, 32));
+  const rotor2 = new THREE.Group(); rotor2.position.set(spX, top + 0.024, spZ);
+  rotor2.add(cyl(0.018, 0.02, 0.014, white, 0, 0, 0, 20));
+  for (const a of [0, Math.PI]) rotor2.add(cyl(0.008, 0.008, 0.016, metal, Math.cos(a) * 0.033, 0, -Math.sin(a) * 0.033, 12));
   deck.add(rotor2);
-  const dome2 = new THREE.Mesh(new THREE.SphereGeometry(0.054, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), cover); dome2.scale.set(1, 0.5, 1); dome2.position.set(spX, top + 0.012, spZ); deck.add(dome2);
-  // シリンジポンプ（左上）: ヘパリン用シリンジを横向きに装着、スライダーと固定ノブ
-  deck.add(rbox(0.13, 0.034, 0.05, 0.008, whiteSoft, -0.09, top + 0.017, -0.145));
-  deck.add(cyl(0.009, 0.009, 0.085, clear, -0.085, top + 0.038, -0.14, 14).rotateZ(Math.PI / 2));
-  deck.add(box(0.012, 0.03, 0.03, blue, -0.04, top + 0.04, -0.14));
-  deck.add(box(0.02, 0.024, 0.024, grayL, -0.135, top + 0.04, -0.14));
-  deck.add(cyl(0.012, 0.012, 0.02, dark, -0.015, top + 0.01, -0.165, 16));
-  // 静脈側ドリップチャンバーホルダー（中央）: 白いブラケット + 透明チャンバー（血液面）+ レベル検出器
-  deck.add(rbox(0.06, 0.1, 0.04, 0.01, white, -0.01, top + 0.05, -0.03));
-  deck.add(cyl(0.014, 0.014, 0.11, clear, -0.01, top + 0.06, 0.0, 16));
-  const chamberLevel = cyl(0.0132, 0.0132, 1, std(0xb01020, { transparent: true, opacity: 0.75, roughness: 0.3 }), -0.01, top + 0.006, 0.0, 16);   // 血液面（高さをスケール）
-  chamberLevel.scale.y = 0.001; deck.add(chamberLevel);
-  deck.add(box(0.07, 0.03, 0.012, grayL, -0.01, top + 0.07, 0.02));
-  // 動脈側圧力ピロー（血液ポンプ手前のホルダーに装着、脱血圧を検知）
-  deck.add(box(0.032, 0.01, 0.06, grayL, -0.04, top + 0.005, 0.15));
-  deck.add(rbox(0.022, 0.014, 0.05, 0.006, std(0xf3dede, { transparent: true, opacity: 0.8, roughness: 0.3 }), -0.04, top + 0.015, 0.15));
-  deck.add(box(0.008, 0.02, 0.012, blue, -0.058, top + 0.014, 0.15));
-  // 動脈側圧力ポッドホルダー（左中、空）
-  deck.add(rbox(0.05, 0.07, 0.036, 0.008, white, -0.125, top + 0.035, -0.02));
-  // 気泡検出器 + 静脈側クランプ（左下、グレーの角丸ブロックにチューブ溝）
-  deck.add(rbox(0.055, 0.05, 0.034, 0.01, std(0xc5ccd3, { roughness: 0.45 }), -0.105, top + 0.025, 0.125));
-  deck.add(box(0.008, 0.05, 0.036, dark, -0.105, top + 0.026, 0.125));
-  deck.add(box(0.03, 0.012, 0.02, dark, -0.105, top + 0.056, 0.125));
-  // 透析量モニター（吸光度センサー）のブロックと動作ランプ
-  deck.add(rbox(0.04, 0.02, 0.03, 0.006, grayL, 0.14, top + 0.01, 0.17));
-  deck.add(cyl(0.005, 0.005, 0.004, std(0x33c46a, { emissive: 0x1a6b3a, emissiveIntensity: 1 }), -0.15, top + 0.002, 0.19, 10));
+  deck.add(rbox(0.11, 0.03, 0.1, 0.016, cover, spX, top + 0.026, spZ));
+  deck.add(cyl(0.005, 0.005, 0.002, blue, spX + 0.04, top + 0.042, spZ + 0.035, 12));
+  // 最下部: 透析液カプラのホルダー（空。カプラはダイアライザーに接続中）と赤・青の表示
+  deck.add(rbox(0.09, 0.02, 0.03, 0.006, white, 0.02, top + 0.01, 0.235));
+  for (const [x, m] of [[0.0, blue], [0.04, red]]) deck.add(cyl(0.012, 0.012, 0.016, m, x, top + 0.024, 0.235, 16));
+  deck.add(box(0.03, 0.004, 0.006, grayL, 0.02, top + 0.012, 0.215));
+  // 透析量モニター（吸光度センサー）の動作ランプ
+  deck.add(cyl(0.004, 0.004, 0.003, std(0x33c46a, { emissive: 0x1a6b3a, emissiveIntensity: 1 }), -0.2, top + 0.0015, 0.2, 10));
   g.add(deck);
-  // コンソール後方の肩（モニター支柱の土台）
-  g.add(rbox(0.3, 0.12, 0.22, 0.03, white, 0, 1.22, -0.13));
 
-  // モニター（紺ベゼルの 15 インチ タッチパネル、白いシェル、下縁に操作ボタン列）: 首で後方上部に取り付け、やや上向き
-  g.add(cyl(0.028, 0.034, 0.16, white, 0, 1.36, -0.09, 20));
-  g.add(cyl(0.035, 0.035, 0.03, grayL, 0, 1.445, -0.09, 20));
-  const monitor = new THREE.Group(); monitor.position.set(0, 1.61, -0.05); monitor.rotation.x = -0.2;
-  monitor.add(rbox(0.44, 0.345, 0.04, 0.015, white, 0, 0, 0));
-  monitor.add(box(0.41, 0.315, 0.004, navy, 0, 0, 0.021));
+  // モニター（紺ベゼルの 15 インチ タッチパネル、白いシェル、下縁に操作ボタン列）: 本体上部後方の首に取り付け、やや上向き
+  g.add(cyl(0.05, 0.07, 0.12, white, 0, 1.27, -0.09, 24));
+  g.add(cyl(0.034, 0.034, 0.06, grayL, 0, 1.35, -0.09, 20));
+  const monitor = new THREE.Group(); monitor.position.set(0, 1.52, -0.05); monitor.rotation.x = -0.16;
+  monitor.add(rbox(0.45, 0.36, 0.05, 0.02, white, 0, 0, -0.012));
+  monitor.add(rbox(0.425, 0.335, 0.016, 0.006, navy, 0, 0, 0.018));   // 前面は z = 0.026
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.33, 0.2475), new THREE.MeshStandardMaterial({ map: T.dcsScreen.texture, emissive: 0xffffff, emissiveMap: T.dcsScreen.texture, emissiveIntensity: 0.85, roughness: 0.25 }));
-  screen.position.set(0, 0.022, 0.0235); monitor.add(screen);
+  screen.position.set(0, 0.022, 0.0266); monitor.add(screen);
   const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.41, 0.045), new THREE.MeshStandardMaterial({ map: T.dcsBezel, roughness: 0.5 }));
-  strip.position.set(0, -0.128, 0.0235); monitor.add(strip);
-  monitor.add(cyl(0.011, 0.011, 0.006, std(0xd8262e, { roughness: 0.4 }), 0.175, -0.128, 0.025, 16).rotateX(Math.PI / 2));   // 赤い緊急停止ボタン（立体）
-  monitor.add(cyl(0.009, 0.009, 0.004, std(0xd9dde4, { roughness: 0.4 }), 0.135, -0.128, 0.024, 16).rotateX(Math.PI / 2));
+  strip.position.set(0, -0.128, 0.0266); monitor.add(strip);
+  monitor.add(cyl(0.011, 0.011, 0.006, std(0xd8262e, { roughness: 0.4 }), 0.175, -0.128, 0.029, 16).rotateX(Math.PI / 2));   // 赤い緊急停止ボタン（立体）
+  monitor.add(cyl(0.009, 0.009, 0.004, std(0xd9dde4, { roughness: 0.4 }), 0.135, -0.128, 0.028, 16).rotateX(Math.PI / 2));
+  const nameplate = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.017), new THREE.MeshStandardMaterial({ map: T.dcsLogo, transparent: true, roughness: 0.4 }));
+  nameplate.position.set(0, 0.158, 0.0266); monitor.add(nameplate);
   // 画面の「運転」キー = タッチ操作（指で押すと沈む薄いキャップ）
   const px = (937 / 1024 - 0.5) * 0.33, py = (0.5 - 299 / 768) * 0.2475 + 0.022;
-  const pumpButton = box(0.046, 0.04, 0.003, std(0x39c46a, { transparent: true, opacity: 0.18, roughness: 0.3 }), px, py, 0.0255);
+  const pumpButton = box(0.046, 0.04, 0.003, std(0x39c46a, { transparent: true, opacity: 0.18, roughness: 0.3 }), px, py, 0.0285);
   pumpButton.castShadow = false;
   pumpButton.userData = { cap: pumpButton, topOffset: [0, 0, 0.0015], travel: 0.003, hitR: 0.026, axis: [0, 0, -1] };
   monitor.add(pumpButton);
   g.add(monitor);
 
-  // 点滴ポール（左前のポールホルダーに立てる、上部は 2 本フック）と生食バッグ
-  const poleX = -0.2, poleZ = 0.16;
-  g.add(box(0.05, 0.05, 0.05, grayL, poleX + 0.04, 0.95, poleZ));
-  g.add(cyl(0.02, 0.02, 0.12, grayL, poleX, 0.97, poleZ, 12));
-  g.add(cyl(0.012, 0.012, 0.025, dark, poleX - 0.025, 0.99, poleZ, 10).rotateZ(Math.PI / 2));
-  g.add(cyl(0.009, 0.009, 1.55, chrome, poleX, 1.72, poleZ, 12));
+  // 点滴ポール（左側面のポールクランプに立てる。上端は 2 本フック）
+  const poleX = -0.265, poleZ = 0.06;
+  g.add(box(0.05, 0.05, 0.06, grayL, -0.235, 1.0, poleZ));                                   // ポールクランプ
+  g.add(cyl(0.012, 0.012, 0.03, dark, -0.235, 1.0, poleZ + 0.045, 10).rotateX(Math.PI / 2));   // クランプのノブ
+  g.add(box(0.05, 0.04, 0.05, grayL, -0.235, 0.82, poleZ));
+  g.add(cyl(0.0095, 0.0095, 1.6, chrome, poleX, 1.6, poleZ, 12));
   for (const s of [-1, 1]) {
     const hook = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.004, 8, 20, Math.PI), chrome);
-    hook.position.set(poleX + s * 0.09, 2.47, poleZ); hook.rotation.z = Math.PI; g.add(hook);
-    g.add(cyl(0.004, 0.004, 0.18, chrome, poleX + s * 0.09, 2.44, poleZ, 8).rotateZ(Math.PI / 2));
+    hook.position.set(poleX + s * 0.09, 2.37, poleZ); hook.rotation.z = Math.PI; g.add(hook);
+    g.add(cyl(0.004, 0.004, 0.18, chrome, poleX + s * 0.09, 2.34, poleZ, 8).rotateZ(Math.PI / 2));
   }
-  g.add(box(0.12, 0.2, 0.04, std(0xeaf4ff, { transparent: true, opacity: 0.75, roughness: 0.3 }), poleX + 0.09, 2.33, poleZ));
-  g.add(cyl(0.0025, 0.0025, 1.0, MAT.plasticClear, poleX - 0.03, 1.75, poleZ + 0.02, 8));   // 生食ライン（ポールに沿って垂れる）
-  // ダイアライザーホルダー（コンソール左側面、ポールの奥）とダイアライザー。動脈側（赤キャップ）が下、静脈側（青）が上で、血液は下から上へ流れる
-  const DX = -0.25, DZ = 0.02, DY0 = 0.925, DY1 = 1.215;
-  for (const y of [0.975, 1.165]) {
-    g.add(box(0.07, 0.02, 0.03, grayL, -0.2, y, DZ));
+  g.add(box(0.12, 0.2, 0.04, std(0xeaf4ff, { transparent: true, opacity: 0.75, roughness: 0.3 }), poleX + 0.09, 2.23, poleZ));   // 生食バッグ
+  g.add(cyl(0.0025, 0.0025, 1.1, MAT.plasticClear, poleX - 0.03, 1.6, poleZ + 0.02, 8));                                  // 生食ライン（ポールに沿って垂れる）
+  // ダイアライザーホルダー（DLC-05: ポールに固定するブラケット + 2 つのリングクランプ）とダイアライザー。
+  // 動脈側（赤キャップ）が下、静脈側（青）が上で、血液は下から上へ流れる
+  const DX = -0.33, DZ = 0.17, DY0 = 0.95, DY1 = 1.25;
+  g.add(box(0.045, 0.2, 0.04, white, poleX - 0.005, 1.1, poleZ));
+  g.add(cyl(0.011, 0.011, 0.03, dark, poleX - 0.03, 1.1, poleZ - 0.03, 10).rotateX(Math.PI / 2));
+  const dlcLabel = new THREE.Mesh(new THREE.PlaneGeometry(0.03, 0.08), new THREE.MeshBasicMaterial({ color: 0xe9ecef }));
+  dlcLabel.position.set(poleX - 0.028, 1.1, poleZ); dlcLabel.rotation.y = -Math.PI / 2; g.add(dlcLabel);
+  for (const y of [1.0, 1.2]) {
+    const arm = box(0.09, 0.016, 0.03, grayL, (poleX + DX) / 2 - 0.01, y, (poleZ + DZ) / 2); arm.rotation.y = -Math.atan2(DZ - poleZ, DX - poleX) - Math.PI; g.add(arm);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.031, 0.004, 8, 28), grayL); ring.position.set(DX, y, DZ); ring.rotation.x = Math.PI / 2; g.add(ring);
-    g.add(cyl(0.008, 0.008, 0.02, dark, -0.2, y + 0.018, DZ, 10));   // 固定ノブ
   }
   const dialyzerFill = fillMaterial();
   const dialyzer = new THREE.Mesh(new THREE.TubeGeometry(new THREE.LineCurve3(new THREE.Vector3(DX, DY0, DZ), new THREE.Vector3(DX, DY1, DZ)), 4, 0.027, 24, false), dialyzerFill);
   dialyzer.castShadow = true; g.add(dialyzer);
   g.add(cyl(0.0235, 0.0235, DY1 - DY0 - 0.002, std(0xf3f0ea, { roughness: 0.95 }), DX, (DY0 + DY1) / 2, DZ, 20));   // 中空糸束
-  g.add(cyl(0.029, 0.027, 0.03, std(0xd9303a, { roughness: 0.4 }), DX, DY0 - 0.013, DZ, 20));                     // 動脈側キャップ（下）
-  g.add(cyl(0.027, 0.029, 0.03, std(0x2f6fd0, { roughness: 0.4 }), DX, DY1 + 0.013, DZ, 20));                     // 静脈側キャップ（上）
-  g.add(cyl(0.005, 0.005, 0.02, std(0xd9303a, { roughness: 0.4 }), DX, DY0 - 0.036, DZ, 10));                     // 血液ポート
-  g.add(cyl(0.005, 0.005, 0.02, std(0x2f6fd0, { roughness: 0.4 }), DX, DY1 + 0.036, DZ, 10));
-  for (const [y, c] of [[DY1 - 0.025, 0xd9303a], [DY0 + 0.025, 0x2f6fd0]]) g.add(cyl(0.006, 0.006, 0.026, std(c, { roughness: 0.4 }), DX + 0.035, y, DZ, 10).rotateZ(Math.PI / 2));   // 透析液ポート（本体側）
-  // 透析液ホース: 赤 = 供給（上の静脈側ポートへ）、青 = 排液（下の動脈側ポートから）— 血液と向流
-  g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(-0.04, 0.8, 0.25), new THREE.Vector3(-0.12, 0.83, 0.3), new THREE.Vector3(-0.2, 1.0, 0.1), new THREE.Vector3(-0.2, 1.19, DZ)]), 24, 0.005, 8), std(0xd9303a)));
-  g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(-0.09, 0.8, 0.25), new THREE.Vector3(-0.17, 0.78, 0.26), new THREE.Vector3(-0.2, 0.9, 0.1), new THREE.Vector3(-0.2, 0.95, DZ)]), 24, 0.005, 8), std(0x2f6fd0)));
-  // 右側面の取っ手
-  const handle = cyl(0.008, 0.008, 0.22, grayL, 0.19, 1.0, 0.08, 10); handle.rotation.x = Math.PI / 2; g.add(handle);
-  for (const z of [-0.03, 0.19]) g.add(box(0.03, 0.016, 0.016, grayL, 0.175, 1.0, z));
+  const dLabel = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.07), new THREE.MeshBasicMaterial({ color: 0xf6f8fb }));
+  dLabel.position.set(DX, (DY0 + DY1) / 2 - 0.02, DZ + 0.0272); g.add(dLabel);
+  g.add(cyl(0.027, 0.029, 0.03, red, DX, DY1 + 0.013, DZ, 20));                     // 動脈側キャップ（上: 血液が入る）
+  g.add(cyl(0.029, 0.027, 0.03, blue, DX, DY0 - 0.013, DZ, 20));                    // 静脈側キャップ（下: 血液が出る）
+  g.add(cyl(0.005, 0.005, 0.02, red, DX, DY1 + 0.036, DZ, 10));                     // 血液ポート
+  g.add(cyl(0.005, 0.005, 0.02, blue, DX, DY0 - 0.036, DZ, 10));
+  // 透析液カプラは同じ色のキャップ側の側面ポートに接続（赤 = 上の赤キャップ側、青 = 下の青キャップ側）、ホースは前面下部の同色ポートへ
+  for (const [y, m, px0] of [[DY1 - 0.03, red, -0.07], [DY0 + 0.03, blue, -0.02]]) {
+    g.add(cyl(0.006, 0.006, 0.026, m, DX + 0.035, y, DZ, 10).rotateZ(Math.PI / 2));                              // ポート（本体側）
+    g.add(cyl(0.017, 0.017, 0.05, m, DX + 0.07, y, DZ, 16).rotateZ(Math.PI / 2));                                // カプラ本体（レバー付き）
+    g.add(box(0.012, 0.03, 0.01, m, DX + 0.07, y + 0.025, DZ));
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(DX + 0.095, y, DZ), new THREE.Vector3(DX + 0.13, y - 0.02, DZ + 0.06), new THREE.Vector3(-0.2, 0.62, 0.34), new THREE.Vector3(px0 - 0.04, 0.58, 0.32), new THREE.Vector3(px0, 0.7, 0.27)]), 36, 0.006, 8), hoseM));
+  }
+  // チャンバー（動脈側 = ポール上部・赤キャップ、静脈側 = ポール下部・青キャップ）: ポールのチャンバーホルダー（前向きのクリップ）に縦に装着。
+  // 上から血液が入り下へ抜ける。液面の上に少し空気がある（気泡トラップ）。治療前は生食で満たされ、ポンプ開始で血液に置き換わる。キャップの横から圧モニターライン
+  const CX = -0.27, CZ = 0.19, LEVEL = 0.8;
+  function makeChamber(y0, y1, capM) {
+    const yc = (y0 + y1) / 2;
+    g.add(box(0.03, 0.03, 0.03, white, poleX, yc, poleZ));
+    g.add(box(0.025, 0.02, 0.1, grayL, (poleX + CX) / 2, yc, (poleZ + CZ) / 2));
+    const clip = new THREE.Mesh(new THREE.TorusGeometry(0.0145, 0.003, 8, 20, Math.PI * 1.5), white); clip.rotation.x = Math.PI / 2; clip.position.set(CX, yc, CZ); g.add(clip);
+    g.add(cyl(0.012, 0.012, y1 - y0, clear, CX, yc, CZ, 16));
+    const h = (y1 - y0) * LEVEL;
+    const liquid = cyl(0.0112, 0.0112, h, std(0xe3ebf1, { transparent: true, opacity: 0.55, roughness: 0.3 }), CX, y0 + h / 2, CZ, 16);   // 液面まで液（生食 → 血液）
+    liquid.castShadow = false; g.add(liquid);
+    g.add(cyl(0.013, 0.013, 0.012, capM, CX, y1 + 0.004, CZ, 12));                                               // 上キャップ（入口）
+    g.add(cyl(0.004, 0.004, 0.014, whiteSoft, CX + 0.012, y1 - 0.006, CZ, 8).rotateZ(Math.PI / 2));               // 圧モニターラインのポート
+    g.add(cyl(0.008, 0.008, 0.008, capM, CX, y0 - 0.002, CZ, 12));                                                // 下端（出口）
+    return liquid.material;
+  }
+  const AY0 = 1.33, AY1 = 1.44, VY0 = 0.76, VY1 = 0.87;
+  const liqA = makeChamber(AY0, AY1, red), liqV = makeChamber(VY0, VY1, blue);
+  const saline = new THREE.Color(0xe3ebf1), blood = new THREE.Color(0xa50816);
+  const setLiquid = (m, p) => { m.color.copy(saline).lerp(blood, p); m.opacity = 0.55 + 0.4 * p; };
 
-  // ---- 装置内の血液回路（装置ローカル座標で固定。充填アニメーション用に区間ごとに分ける）
-  // 流れ: A針 → [portA] ピロー → 血液ポンプ（ローター周りを半周）→ ダイアライザー下端 → ダイアライザー（上へ）→ 静脈側チャンバー → 気泡検出器/静脈クランプ → [portV] → V針
+  // ---- 装置内の血液回路（装置ローカル座標で固定。治療前から液で満たされている。ポンプ開始の充填アニメーション用に区間ごとに分ける）
+  // 流れ: A針 → [portA] 気泡検出器（A の溝を下から上へ）→ 血液ポンプ（左上から入り、時計回りに回って左下へ）→ 動脈側チャンバー（ポール上部）→
+  //       ダイアライザー上端（赤）→ ダイアライザー（下へ）→ 下端（青）→ 静脈側チャンバー（ポール下部）→ 気泡検出器（V の溝を上から下へ）/静脈クランプ → [portV] → V針
   deck.updateMatrix();
   const dl = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(deck.matrix);
-  const mkLine = pts => { const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, false, 'centripetal'), 90, 0.0028, 10, false), fillMaterial()); m.castShadow = true; g.add(m); return m; };
-  const portA = dl(-0.04, top + 0.006, 0.222), portV = dl(-0.105, top + 0.006, 0.222);
-  const ptsA = [portA, dl(-0.04, top + 0.012, 0.178), dl(-0.04, top + 0.012, 0.122), dl(-0.02, top + 0.03, 0.105)];
-  for (let i = 0; i <= 4; i++) { const a = Math.PI + i / 4 * Math.PI; ptsA.push(dl(bpX + Math.cos(a) * 0.064, top + 0.03, bpZ + Math.sin(a) * 0.064)); }   // ローター周り（奥側を半周）
-  ptsA.push(dl(bpX + 0.072, top + 0.026, bpZ + 0.07), dl(bpX + 0.06, top + 0.01, 0.222),
-    new THREE.Vector3(bpX + 0.06, 0.957, 0.252), new THREE.Vector3(-0.05, 0.957, 0.256), new THREE.Vector3(-0.17, 0.95, 0.235), new THREE.Vector3(-0.255, 0.9, 0.13),
-    new THREE.Vector3(DX, DY0 - 0.06, DZ + 0.02), new THREE.Vector3(DX, DY0 - 0.046, DZ));
-  const lineMA = mkLine(ptsA);
-  const chamberTop = dl(-0.01, top + 0.115, 0.0), chamberBottom = dl(-0.01, top + 0.005, 0.0);
-  const lineMV1 = mkLine([new THREE.Vector3(DX, DY1 + 0.046, DZ), new THREE.Vector3(DX, DY1 + 0.075, DZ + 0.03), new THREE.Vector3(-0.19, 1.3, 0.1), new THREE.Vector3(-0.09, 1.27, 0.14), chamberTop.clone().add(new THREE.Vector3(0, 0.03, 0.01)), chamberTop]);
-  const lineMV2 = mkLine([chamberBottom, dl(-0.035, top + 0.012, 0.04), dl(-0.08, top + 0.02, 0.095), dl(-0.105, top + 0.03, 0.125), dl(-0.105, top + 0.02, 0.17), portV]);
-  const fills = { mA: lineMA.material.userData.fill, dialyzer: dialyzerFill.userData.fill, mV1: lineMV1.material.userData.fill, mV2: lineMV2.material.userData.fill };
+  const mkLine = (pts, r = 0.0028, mat = null) => { const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, false, 'centripetal'), 100, r, 10, false), mat || fillMaterial()); m.castShadow = true; g.add(m); return m; };
+  const portA = dl(BD.ax, top + 0.03, 0.215), portV = dl(BD.vx, top + 0.03, 0.215);
+  const ptsA = [portA, dl(BD.ax, top + 0.03, 0.19), dl(BD.ax, top + 0.03, 0.1), dl(BD.ax, top + 0.03, 0.06), dl(-0.09, top + 0.03, -0.02), dl(-0.03, top + 0.03, -0.12), dl(0.0, top + 0.03, -0.15)];
+  for (let i = 0; i <= 8; i++) { const a = (-150 + i * 300 / 8) * Math.PI / 180; ptsA.push(dl(bpX + Math.cos(a) * 0.062, top + 0.03, bpZ + Math.sin(a) * 0.062)); }   // ローター周り（右側を回って左下へ = 時計回り）
+  ptsA.push(dl(bpX - 0.09, top + 0.03, bpZ + 0.03), dl(-0.06, top + 0.03, -0.1), dl(-0.2, top + 0.03, -0.18),
+    new THREE.Vector3(-0.26, 1.3, 0.1), new THREE.Vector3(CX - 0.01, AY1 + 0.05, CZ - 0.01), new THREE.Vector3(CX, AY1 + 0.012, CZ));
+  const lineMA1 = mkLine(ptsA);
+  const lineMA2 = mkLine([new THREE.Vector3(CX, AY0 - 0.004, CZ), new THREE.Vector3(CX - 0.02, AY0 - 0.03, CZ), new THREE.Vector3(DX, DY1 + 0.08, DZ + 0.01), new THREE.Vector3(DX, DY1 + 0.046, DZ)]);
+  const lineMV1 = mkLine([new THREE.Vector3(DX, DY0 - 0.046, DZ), new THREE.Vector3(DX, DY0 - 0.075, DZ + 0.01), new THREE.Vector3(CX - 0.02, VY1 + 0.04, CZ), new THREE.Vector3(CX, VY1 + 0.012, CZ)]);
+  const lineMV2 = mkLine([new THREE.Vector3(CX, VY0 - 0.004, CZ), new THREE.Vector3(CX + 0.01, VY0 - 0.03, CZ + 0.03), new THREE.Vector3(-0.2, 0.74, 0.3), dl(BD.vx - 0.02, top + 0.05, 0.03), dl(BD.vx, top + 0.03, 0.09), dl(BD.vx, top + 0.03, 0.19), portV]);
+  // 圧モニターライン（細い透明チューブ）: 各チャンバー上部のポートから装置の圧ポート（動脈圧 / 静脈圧）へ
+  const monM = std(0xffffff, { transparent: true, opacity: 0.5, roughness: 0.2 });
+  mkLine([new THREE.Vector3(CX + 0.02, AY1 - 0.006, CZ), new THREE.Vector3(-0.2, 1.38, 0.1), dl(-0.17, top + 0.04, -0.16), dl(-0.15, top + 0.03, -0.14)], 0.0015, monM);
+  mkLine([new THREE.Vector3(CX + 0.02, VY1 - 0.006, CZ), new THREE.Vector3(-0.2, 0.9, 0.28), dl(-0.2, top + 0.05, -0.06), dl(-0.15, top + 0.03, -0.08)], 0.0015, monM);
+  const fills = { mA1: lineMA1.material.userData.fill, mA2: lineMA2.material.userData.fill, dialyzer: dialyzerFill.userData.fill, mV1: lineMV1.material.userData.fill, mV2: lineMV2.material.userData.fill };
+  const clamp01 = v => Math.min(1, Math.max(0, v));
   function setFill(stage, p) {
-    if (stage === 'chamber') { const h = 0.06 * Math.max(0.001, p); chamberLevel.scale.y = h; chamberLevel.position.y = top + 0.006 + h / 2; }
+    if (stage === 'chamber') setLiquid(liqV, p);                                   // 静脈側チャンバーの液が血液に
+    else if (stage === 'dialyzer') fills.dialyzer.set(p, true);                     // 上（赤）から下（青）へ
+    else if (stage === 'mA') {   // 気泡検出器 → ポンプ → 動脈側チャンバー（液が血液に）→ ダイアライザー入口
+      fills.mA1.set(clamp01(p / 0.6));
+      setLiquid(liqA, clamp01((p - 0.6) / 0.2));
+      fills.mA2.set(clamp01((p - 0.8) / 0.2));
+    }
     else fills[stage]?.set(p);
   }
 
   g.updateMatrixWorld(true);
-  // ports = 患者側回路が装置に入る/出る位置（コンソール前縁）、guide = 棚前縁の回路ガイド、home = 未接続時にコネクタが垂れる位置
+  // ports = 患者側回路が装置に入る/出る位置（気泡検出器の下端: 左 = A, 右 = V）、guide = コンソール左下前縁の回路ガイド、home = 未接続時にコネクタが垂れる位置
   const ports = { A: g.localToWorld(portA.clone()), V: g.localToWorld(portV.clone()) };
-  const guide = { A: g.localToWorld(new THREE.Vector3(-0.03, 0.95, 0.31)), V: g.localToWorld(new THREE.Vector3(-0.11, 0.95, 0.31)) };
-  const home = { A: g.localToWorld(new THREE.Vector3(-0.03, 0.84, 0.4)), V: g.localToWorld(new THREE.Vector3(-0.11, 0.84, 0.4)) };
+  const guide = { A: g.localToWorld(new THREE.Vector3(-0.16, 0.72, 0.3)), V: g.localToWorld(new THREE.Vector3(-0.1, 0.72, 0.3)) };
+  const home = { A: g.localToWorld(new THREE.Vector3(-0.17, 0.62, 0.38)), V: g.localToWorld(new THREE.Vector3(-0.09, 0.62, 0.38)) };
   return { group: g, rotors: [rotor, rotor2], dialyzer, pumpButton, ports, guide, home, setFill };
 }
 

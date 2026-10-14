@@ -1,5 +1,5 @@
 // オフライン動作用 Service Worker（PWA としてインストール後、PC なしで起動できる）
-const CACHE = 'senshi-vr-v6';
+const CACHE = 'senshi-vr-v7';
 const ASSETS = ['./', './index.html', './app.js', './manifest.json', './icon.svg', './icon-192.png', './icon-512.png',
   './lib/three.module.js', './lib/OrbitControls.js', './lib/RoomEnvironment.js', './lib/GLTFLoader.js', './lib/BufferGeometryUtils.js',
   './assets/lps/LeePerrySmith.glb', './assets/lps/col.jpg', './assets/lps/normal.jpg', './assets/hands/left.glb', './assets/hands/right.glb',

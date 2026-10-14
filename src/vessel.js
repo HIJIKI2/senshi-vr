@@ -135,11 +135,13 @@ export function createVessel(type, opts = {}) {
   const branches = type === 'avf' ? avfBranches(deep) : avgBranches(deep);
   const group = new THREE.Group();         // 前腕側の血管（前腕を持ち上げると一緒に動く）
   const upperGroup = new THREE.Group();    // 上腕側の血管
-  const veinMat = new THREE.MeshPhysicalMaterial({ color: 0x8a5f8e, roughness: 0.35, transparent: true, opacity: deep ? 0 : 0.62, clearcoat: 0.3, clearcoatRoughness: 0.4, depthWrite: false, side: THREE.DoubleSide });
+  // 皮静脈の表示: AVF 標準のみ透けて見える。deep モードと AVG では見えない（AVG はグラフトの畝だけ。エコーには全部映る）
+  const veinVisible = !deep && type === 'avf';
+  const veinMat = new THREE.MeshPhysicalMaterial({ color: 0x8a5f8e, roughness: 0.35, transparent: true, opacity: veinVisible ? 0.62 : 0, clearcoat: 0.3, clearcoatRoughness: 0.4, depthWrite: false, side: THREE.DoubleSide });
   // グラフトは皮下にあり、皮膚の盛り上がり（皮膚色の畝）としてだけ見える。deep モードでは見えない（エコーで探す）
   const graftMat = new THREE.MeshPhysicalMaterial({ color: 0xe8b9a2, roughness: 0.62, transparent: true, opacity: deep ? 0 : 0.95, depthWrite: false, sheen: 0.2, sheenColor: new THREE.Color(0xffd9c8) });
   const arteryMat = new THREE.MeshStandardMaterial({ color: 0xa83a3a, roughness: 0.5, transparent: true, opacity: 0.0, depthWrite: false });   // 動脈は深いので見えない（エコーのみ）
-  const lumenMat = new THREE.MeshStandardMaterial({ color: 0x5a0d18, roughness: 0.6, transparent: true, opacity: deep ? 0 : 0.55, depthWrite: false });
+  const lumenMat = new THREE.MeshStandardMaterial({ color: 0x5a0d18, roughness: 0.6, transparent: true, opacity: veinVisible ? 0.55 : 0, depthWrite: false });
 
   // 各枝: 曲線、等間隔サンプル（closest 用）、メッシュ。半径は rAt(t)（基本径 × 走行に沿った変化 × 狭窄 × 怒張）
   const samples = [];   // { p, t, tangent, branch }

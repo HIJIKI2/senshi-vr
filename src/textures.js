@@ -192,6 +192,25 @@ export function createTextures() {
     c.fillStyle = '#e4e7ee'; c.font = 'italic bold 58px sans-serif'; c.textBaseline = 'middle'; c.textAlign = 'center';
     c.fillText('DCS-200Si', 300, 66);
   });
+  // 下部キャビネット側面の青い装飾帯（縦向き: 上は横線、下へ行くほどドットに変わる）
+  T.dcsSide = make(128, 1024, (c, w, h) => {
+    const grad = c.createLinearGradient(0, 0, 0, h); grad.addColorStop(0, '#2b4a8f'); grad.addColorStop(1, '#1d3570');
+    c.fillStyle = grad; c.fillRect(0, 0, w, h);
+    c.strokeStyle = 'rgba(200,214,245,0.6)'; c.lineWidth = 2;
+    for (let y = 6; y < h * 0.5; y += 8) { c.beginPath(); c.moveTo(0, y); c.lineTo(w, y); c.stroke(); }
+    c.fillStyle = 'rgba(200,214,245,0.65)';
+    for (let y = h * 0.5; y < h; y += 13) for (let x = 7; x < w; x += 13) {
+      const r = 1.5 + 4 * Math.min(1, (y - h * 0.5) / (h * 0.4));
+      c.beginPath(); c.arc(x + ((Math.round(y / 13)) % 2) * 6, y, r, 0, Math.PI * 2); c.fill();
+    }
+  });
+  // DCS-200Si の銘板（黒いロゼンジに銀文字、背景は透明）
+  T.dcsLogo = make(512, 96, (c, w, h) => {
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = '#15192a'; c.beginPath(); c.moveTo(40, 14); c.lineTo(470, 8); c.quadraticCurveTo(505, 48, 470, 88); c.lineTo(40, 82); c.quadraticCurveTo(10, 48, 40, 14); c.fill();
+    c.fillStyle = '#d9dde6'; c.font = 'italic bold 56px sans-serif'; c.textBaseline = 'middle'; c.textAlign = 'center';
+    c.fillText('DCS-200Si', 256, 50);
+  });
   // モニター下縁の操作ボタン列（左: 消音・画面切替、中央: ロゴ、右: 警報ランプ・ボタン・赤い緊急停止）
   T.dcsBezel = make(1024, 112, (c, w, h) => {
     c.fillStyle = '#1c2a4e'; c.fillRect(0, 0, w, h);
@@ -311,7 +330,7 @@ export function makeFillTexture() {
     const p = Math.min(1, Math.max(0, progress));
     if (Math.abs(p - cur) < 0.002 && p !== 0 && p !== 1) return;
     cur = p;
-    ctx.fillStyle = 'rgba(236,241,246,0.5)'; ctx.clearRect(0, 0, 512, 2); ctx.fillRect(0, 0, 512, 2);
+    ctx.fillStyle = 'rgba(232,238,244,0.62)'; ctx.clearRect(0, 0, 512, 2); ctx.fillRect(0, 0, 512, 2);   // 血液が来る前は生食で満たされている（白っぽい半透明）
     ctx.fillStyle = 'rgba(165,8,22,0.97)';
     const n = Math.round(p * 512);
     if (fromEnd) ctx.fillRect(512 - n, 0, n, 2); else ctx.fillRect(0, 0, n, 2);

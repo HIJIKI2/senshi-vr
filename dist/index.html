@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>透析 穿刺トレーニングVR</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#10233a">
+<style>
+  html, body { margin: 0; height: 100%; background: #10233a; color: #e8eef7; font-family: system-ui, "Noto Sans JP", sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; pointer-events: none; padding-bottom: 32px; gap: 12px; }
+  #info { background: rgba(16,35,58,.85); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: 520px; text-align: center; line-height: 1.6; }
+  #vrbtn { pointer-events: auto; font-size: 20px; font-weight: 700; padding: 14px 36px; border-radius: 999px; border: 0; background: #2ec4b6; color: #062a2a; cursor: pointer; }
+  #vrbtn:disabled { background: #556; color: #bbb; cursor: default; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="overlay">
+  <div id="info">
+    <b>透析室 穿刺トレーニングVR</b><br>
+    Quest 3 のブラウザで開き「VRを開始」を押してください。<br>
+    右手/左手のトリガーで器具を持ち、離すと置けます。
+  </div>
+  <button id="vrbtn" disabled>確認中…</button>
+</div>
+<script type="module" src="./app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+  }
+</script>
+</body>
+</html>

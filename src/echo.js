@@ -39,24 +39,58 @@ function textTex(w, h, draw) {
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
 }
 
-// ---------------------------------------------------------------- プローブ（iViz air L10-5: 黒い本体、先端 19mm 厚、約 58×170×29mm）
+// ---------------------------------------------------------------- プローブ（富士フイルム iViz air リニアプローブ FWTL10-5 の製品写真を参考）
+// 形: 黒いグラファイト調の本体。先端のヘッドは幅広（58mm）で薄く（19mm）、握りは細く（40mm 幅・28mm 厚）、下端は丸い。全長 約 165mm、重さ 147g。
+// 前面（親指側）: ヘッドに「10-5」の表示と白い▼のセンターマーク、握りに縦長の親指の溝、丸いくぼみ、電源・フリーズの 2 つの丸ボタン、
+// バッテリー LED、FUJIFILM ロゴ、無線マーク。センターマークはヘッドの前面・背面と両側面の中央にあり、走査面の中心（画像の中央の▼）を示す。
+// エコー下穿刺ではこのマークに針を合わせる（短軸: マークの位置で刺すと針が画像の中央に出る。長軸: マークの面に沿って刺す）
+// 原点 = 音響レンズ面の中心、+y = 持ち手方向、x = 走査面の横方向（幅、+x = 画面の F マーク側）、z = 厚み方向（+z = 前面）
 export function makeProbe() {
   const g = new THREE.Group();
-  const black = std(0x25272b, { roughness: 0.45 });
-  const dark = std(0x3b3e44, { roughness: 0.5 });
-  const lens = std(0x8f949b, { roughness: 0.35 });
-  g.add(rbox(0.05, 0.13, 0.028, 0.01, black, 0, 0.095, 0));                 // 持ち手
-  g.add(rbox(0.058, 0.045, 0.019, 0.006, dark, 0, 0.028, 0));               // 先端部（薄い）
-  g.add(box(0.04, 0.0025, 0.009, lens, 0, 0.0012, 0));                      // 音響レンズ
-  g.add(box(0.058, 0.004, 0.019, black, 0, 0.006, 0));
-  g.add(box(0.004, 0.012, 0.004, std(0xbfc3c8), 0.03, 0.032, 0));           // 向きのマーク（+x 側）= 画面の F マーク側
-  const led = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.002, 16), std(0x3ad17a, { emissive: 0x1d8a4a, emissiveIntensity: 1.2 }));
-  led.rotation.x = Math.PI / 2; led.position.set(0, 0.12, 0.0145); g.add(led);
-  const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.002, 20), dark); btn.rotation.x = Math.PI / 2; btn.position.set(0, 0.1, 0.0145); g.add(btn);
-  const label = new THREE.Mesh(new THREE.PlaneGeometry(0.03, 0.012), new THREE.MeshBasicMaterial({ map: textTex(256, 100, (c, w, h) => { c.fillStyle = '#3b3e44'; c.fillRect(0, 0, w, h); c.fillStyle = '#e8e8e8'; c.font = 'bold 56px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('10-5', w / 2, h / 2); }) }));
-  label.position.set(0, 0.038, 0.0096); g.add(label);
-  const logo = new THREE.Mesh(new THREE.PlaneGeometry(0.026, 0.005), new THREE.MeshBasicMaterial({ map: textTex(256, 50, (c, w, h) => { c.fillStyle = '#25272b'; c.fillRect(0, 0, w, h); c.fillStyle = '#cfd3d8'; c.font = 'bold 34px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('FUJIFILM', w / 2, h / 2); }) }));
-  logo.position.set(0, 0.07, 0.0142); g.add(logo);
+  const body = std(0x24262a, { roughness: 0.55 });
+  const bodyL = std(0x3a3d43, { roughness: 0.5 });
+  const lensM = std(0x9ea3aa, { roughness: 0.3 });
+  const white = new THREE.MeshBasicMaterial({ color: 0xf4f4f4 });
+  const extrude = (shape, depth, bevel, m) => {
+    const mesh = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 4, curveSegments: 14 }), m);
+    mesh.position.z = -depth / 2; mesh.castShadow = true; mesh.receiveShadow = true; return mesh;
+  };
+  // ヘッド（先端部）: 幅 58mm → 握りの幅 40mm へ曲線ですぼまる。厚さ 19mm
+  const hs = new THREE.Shape();
+  hs.moveTo(-0.026, 0.002); hs.lineTo(0.026, 0.002); hs.lineTo(0.026, 0.024);
+  hs.bezierCurveTo(0.026, 0.04, 0.017, 0.044, 0.017, 0.06); hs.lineTo(-0.017, 0.06);
+  hs.bezierCurveTo(-0.017, 0.044, -0.026, 0.04, -0.026, 0.024); hs.closePath();
+  g.add(extrude(hs, 0.013, 0.003, body));
+  // 握り: 幅 40mm、厚さ 28mm、下端は丸い
+  const gs = new THREE.Shape(); const hw = 0.017, y0 = 0.05, y1 = 0.165, r = 0.015;
+  gs.moveTo(-hw, y0); gs.lineTo(hw, y0); gs.lineTo(hw, y1 - r); gs.quadraticCurveTo(hw, y1, hw - r, y1); gs.lineTo(-hw + r, y1); gs.quadraticCurveTo(-hw, y1, -hw, y1 - r); gs.closePath();
+  g.add(extrude(gs, 0.022, 0.003, body));
+  // 音響レンズ（先端の少し明るいグレーの面）
+  g.add(rbox(0.05, 0.004, 0.011, 0.0015, lensM, 0, 0.001, 0));
+  // センターマーク ▼（白）: 前面・背面はヘッドの下端中央で下（レンズ面）を指す。両側面は細い縦線
+  const tri = new THREE.Shape(); tri.moveTo(-0.0035, 0.0145); tri.lineTo(0.0035, 0.0145); tri.lineTo(0, 0.006); tri.closePath();
+  for (const sz of [1, -1]) { const m = new THREE.Mesh(new THREE.ShapeGeometry(tri), white); m.position.z = sz * 0.0097; if (sz < 0) m.rotation.y = Math.PI; g.add(m); }
+  for (const sx of [1, -1]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.0014, 0.008), white); m.position.set(sx * 0.0292, 0.011, 0); m.rotation.y = sx * Math.PI / 2; g.add(m); }
+  // 向きのマーク（+x 側）: ヘッド側面の小さな突起 = 画面の F マーク側
+  g.add(rbox(0.003, 0.01, 0.006, 0.001, bodyL, 0.03, 0.03, 0));
+  // 「10-5」の表示（ヘッド前面の右上）
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(0.018, 0.0065), new THREE.MeshBasicMaterial({ map: textTex(256, 92, (c, w, h) => { c.fillStyle = '#24262a'; c.fillRect(0, 0, w, h); c.fillStyle = '#e8e8e8'; c.font = 'bold 60px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('10-5', w / 2 + 10, h / 2); c.beginPath(); c.moveTo(22, 20); c.lineTo(40, 20); c.lineTo(31, 70); c.closePath(); c.fill(); }) }));
+  label.position.set(0.012, 0.03, 0.0097); g.add(label);
+  // 前面の造形（握り前面 z = +0.014）: 親指の縦溝、丸いくぼみ、電源・フリーズボタン、LED、ロゴ、無線マーク
+  g.add(rbox(0.011, 0.03, 0.004, 0.003, bodyL, 0, 0.082, 0.0125));
+  g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.002, 20), bodyL).rotateX(Math.PI / 2).translateY(0.0135).translateZ(-0.104));
+  const icon = (txt, y) => {
+    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.002, 20), bodyL); btn.rotation.x = Math.PI / 2; btn.position.set(0, y, 0.0145); g.add(btn);
+    const ic = new THREE.Mesh(new THREE.PlaneGeometry(0.006, 0.006), new THREE.MeshBasicMaterial({ map: textTex(64, 64, (c, w, h) => { c.fillStyle = '#3a3d43'; c.fillRect(0, 0, w, h); c.fillStyle = '#e8e8e8'; c.font = 'bold 40px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, w / 2, h / 2 + 2); }) }));
+    ic.position.set(0, y, 0.0156); g.add(ic);
+  };
+  icon('⏻', 0.117); icon('⏯', 0.129);
+  for (let i = 0; i < 3; i++) g.add(new THREE.Mesh(new THREE.CircleGeometry(0.0007, 8), new THREE.MeshBasicMaterial({ color: i === 0 ? 0x3ad17a : 0x6a6e75 })).translateX(-0.004 + i * 0.003).translateY(0.1385).translateZ(0.0142));
+  g.add(new THREE.Mesh(new THREE.PlaneGeometry(0.0035, 0.0018), new THREE.MeshBasicMaterial({ color: 0xbfc3c8 })).translateX(0.006).translateY(0.1385).translateZ(0.0142));   // 電池マーク
+  const logo = new THREE.Mesh(new THREE.PlaneGeometry(0.022, 0.0042), new THREE.MeshBasicMaterial({ map: textTex(256, 50, (c, w, h) => { c.fillStyle = '#24262a'; c.fillRect(0, 0, w, h); c.fillStyle = '#d8dbe0'; c.font = 'bold 36px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('FUJIFILM', w / 2, h / 2); }) }));
+  logo.position.set(0, 0.147, 0.0142); g.add(logo);
+  const wifi = new THREE.Mesh(new THREE.PlaneGeometry(0.008, 0.005), new THREE.MeshBasicMaterial({ map: textTex(96, 60, (c, w, h) => { c.fillStyle = '#24262a'; c.fillRect(0, 0, w, h); c.fillStyle = '#d8dbe0'; c.font = 'bold 34px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('T·))', w / 2, h / 2); }) }));
+  wifi.position.set(0, 0.156, 0.0142); g.add(wifi);
   return g;
 }
 // プローブ立てとゼリー
