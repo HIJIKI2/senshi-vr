@@ -1,8 +1,8 @@
 // オフライン動作用 Service Worker（PWA としてインストール後、PC なしで起動できる）
-const CACHE = 'senshi-vr-v7';
+const CACHE = 'senshi-vr-v38';
 const ASSETS = ['./', './index.html', './app.js', './manifest.json', './icon.svg', './icon-192.png', './icon-512.png',
   './lib/three.module.js', './lib/OrbitControls.js', './lib/RoomEnvironment.js', './lib/GLTFLoader.js', './lib/BufferGeometryUtils.js',
-  './assets/lps/LeePerrySmith.glb', './assets/lps/col.jpg', './assets/lps/normal.jpg', './assets/hands/left.glb', './assets/hands/right.glb',
+  './assets/lps/LeePerrySmith.glb', './assets/lps/col.jpg', './assets/lps/normal.jpg', './assets/hands/left.glb', './assets/hands/right.glb', './assets/ctrl/left.webp', './assets/ctrl/right.webp', './assets/ctrl/logo.png', './assets/ctrl/logo_shape.json',
   './src/constants.js', './src/vessel.js', './src/textures.js', './src/room.js', './src/patient.js', './src/handmodel.js', './src/tools.js', './src/echo.js'];
 
 self.addEventListener('install', e => {

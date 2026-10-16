@@ -46,6 +46,8 @@ export function armAt(x) {
   return { y: ARM_Y + (SHOULDER.y - ARM_Y) * t, z: ARM_Z + (SHOULDER.z - ARM_Z) * t, r: 0.043 + 0.007 * t + 0.004 * Math.sin(Math.PI * t) };
 }
 export const onArm = x => x > ARM_X_MIN && x < WRIST_X;
+// 肘周りの変形の重み: 0 = 上腕の座標系、1 = 前腕の座標系。肘の前後 3.5cm で滑らかに切り替える（血管の表示と位置判定の両方で使う）
+export function elbowBlend(x) { const t = Math.min(1, Math.max(0, (x - (ELBOW_X - 0.035)) / 0.07)); return t * t * (3 - 2 * t); }
 // 皮膚表面の高さ（z は腕軸からのずれを考慮した円筒面）。前腕・上腕とも可
 export function skinY(x, z = ARM_Z) {
   const a = armAt(x), dz = z - a.z;

@@ -297,13 +297,24 @@ export function makeGloveBox(T) {
   return g;
 }
 // 1 枚の手袋（箱から引き出した状態: 手首側を持つので指先が垂れ下がる）。原点 = 手首口の中心、指先は -y
+// 箱から引き出した手袋 = くしゃくしゃに丸まった塊（手袋と同じ材質）。原点 = 塊の中心。反対の手に近づけると装着される
 export function makeGlove(mat) {
   const g = new THREE.Group();
-  const cuff = mesh(new THREE.CylinderGeometry(0.03, 0.028, 0.03, 20, 1, true), mat, [0, -0.015, 0]); cuff.material = mat; g.add(cuff);
-  const palm = box(0.08, 0.014, 0.03, mat, [0, -0.062, 0]); g.add(palm);
-  for (let i = 0; i < 4; i++) g.add(cyl(0.0085, 0.0075, 0.065, mat, [-0.03 + i * 0.02, -0.105, 0], [0, 0, 0.05 * (i - 1.5)], 12));
-  g.add(cyl(0.009, 0.008, 0.05, mat, [0.047, -0.07, 0.004], [0, 0, -0.35], 12));   // 母指
-  g.traverse(o => { if (o.isMesh) o.material.side = THREE.DoubleSide; });
+  let seed = 7; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const lump = (r, sx, sy, sz, pos, amp) => {
+    const geo = new THREE.IcosahedronGeometry(r, 3), p = geo.attributes.position, v = new THREE.Vector3();
+    for (let i = 0; i < p.count; i++) {   // 表面を不規則に凹ませて布のしわに
+      v.fromBufferAttribute(p, i);
+      const n = Math.sin(v.x * 180 + 1) * Math.cos(v.y * 150 + 2) * Math.sin(v.z * 170 + 3);
+      v.multiplyScalar(1 + amp * n + 0.06 * (rnd() - 0.5)); p.setXYZ(i, v.x * sx, v.y * sy, v.z * sz);
+    }
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, mat); m.position.set(...pos); m.castShadow = true; m.receiveShadow = true; return m;
+  };
+  g.add(lump(0.028, 1.25, 0.7, 1.0, [0, 0, 0], 0.16));
+  g.add(lump(0.02, 1.1, 0.7, 0.9, [0.022, 0.008, 0.012], 0.18));
+  g.add(lump(0.017, 1.0, 0.75, 1.2, [-0.02, 0.006, -0.01], 0.18));
+  g.add(lump(0.012, 1.3, 0.6, 1.0, [0.004, 0.016, -0.014], 0.2));
   return g;
 }
 export function makeGauze() {
@@ -333,10 +344,10 @@ export function makeSharpsBox() {
   g.add(box(0.08, 0.05, 0.002, MAT.white, [0, 0.08, 0.046]));
   return g;
 }
-export function makeResetButton(T) {
+export function makeResetButton(T, label = T.resetLabel) {
   const g = new THREE.Group();
   g.add(box(0.08, 0.02, 0.08, std(0x2b3038, { roughness: 0.6 }), [0, 0.01, 0]));
-  g.add(mesh(new THREE.PlaneGeometry(0.06, 0.03), new THREE.MeshBasicMaterial({ map: T.resetLabel }), [0, 0.0205, 0.023], [-Math.PI / 2, 0, 0]));
+  g.add(mesh(new THREE.PlaneGeometry(0.06, 0.03), new THREE.MeshBasicMaterial({ map: label }), [0, 0.0205, 0.023], [-Math.PI / 2, 0, 0]));
   g.add(cyl(0.026, 0.026, 0.006, std(0x8a9199, { metalness: 0.8, roughness: 0.35 }), [0, 0.023, -0.012]));   // 金属リング（押しボタンの座）
   g.add(cyl(0.021, 0.021, 0.002, std(0x15181d), [0, 0.0265, -0.012]));                                       // ボタン穴
   // 押し込みキャップ（物理ボタン: 指で押すと沈む）
@@ -345,6 +356,18 @@ export function makeResetButton(T) {
   cap.add(cyl(0.016, 0.02, 0.003, std(0xe8474f, { roughness: 0.35, emissive: 0x3a0000 }), [0, 0.0085, 0]));   // 上面の丸み
   g.add(cap);
   g.userData.cap = cap; g.userData.topOffset = [0, 0.01, 0]; g.userData.travel = 0.007; g.userData.hitR = 0.03;
+  return g;
+}
+// 操作説明パネルの OK ボタン（大きな緑の押しボタン。面は +z 側、押し込み方向は -z。指先でも掌でも押せる）
+export function makeOkButton(T) {
+  const g = new THREE.Group();
+  g.add(box(0.26, 0.15, 0.02, std(0x2b3038, { roughness: 0.6 }), [0, 0, 0]));
+  g.add(cyl(0.062, 0.062, 0.008, std(0x8a9199, { metalness: 0.8, roughness: 0.35 }), [0, 0, 0.013], [Math.PI / 2, 0, 0], 32));
+  const cap = new THREE.Group(); cap.position.set(0, 0, 0.016);
+  cap.add(cyl(0.052, 0.054, 0.024, std(0x2ea58a, { roughness: 0.4, emissive: 0x0b3a2e }), [0, 0, 0.012], [Math.PI / 2, 0, 0], 32));
+  cap.add(mesh(new THREE.PlaneGeometry(0.085, 0.085), new THREE.MeshBasicMaterial({ map: T.okLabel, transparent: true }), [0, 0, 0.0245]));
+  g.add(cap);
+  g.userData = { cap, topOffset: [0, 0, 0.024], travel: 0.012, hitR: 0.065, axis: [0, 0, -1] };
   return g;
 }
 export function makeSanitizer() {

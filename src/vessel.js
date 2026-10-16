@@ -135,6 +135,7 @@ export function createVessel(type, opts = {}) {
   const branches = type === 'avf' ? avfBranches(deep) : avgBranches(deep);
   const group = new THREE.Group();         // 前腕側の血管（前腕を持ち上げると一緒に動く）
   const upperGroup = new THREE.Group();    // 上腕側の血管
+  const blendGroup = new THREE.Group();    // 肘をまたぐ血管（ワールド座標に置き、頂点ごとに前腕/上腕の変換を混ぜて変形する）
   // 皮静脈の表示: AVF 標準のみ透けて見える。deep モードと AVG では見えない（AVG はグラフトの畝だけ。エコーには全部映る）
   const veinVisible = !deep && type === 'avf';
   const veinMat = new THREE.MeshPhysicalMaterial({ color: 0x8a5f8e, roughness: 0.35, transparent: true, opacity: veinVisible ? 0.62 : 0, clearcoat: 0.3, clearcoatRoughness: 0.4, depthWrite: false, side: THREE.DoubleSide });
@@ -166,26 +167,61 @@ export function createVessel(type, opts = {}) {
       const prev = sp[Math.max(0, i - 1)], next = sp[Math.min(sp.length - 1, i + 1)];
       samples.push({ p: sp[i], t: i / n, tangent: new THREE.Vector3().subVectors(next, prev).normalize(), branch: b });
     }
-    const parent = b.forearm ? group : upperGroup;
-    b.mesh = new THREE.Mesh(new THREE.BufferGeometry(), b.kind === 'artery' ? arteryMat : b.kind === 'graft' ? graftMat : veinMat);
-    b.mesh.renderOrder = 2; parent.add(b.mesh);
+    // 表示メッシュ: 肘の周り（±3.5cm）にかからない枝は前腕側（group）か上腕側（upperGroup）に置いて剛体として動かす。
+    // 肘の周りを通る枝（尺側皮静脈・肘正中皮静脈・橈側皮静脈の肘側など）は blendGroup に置き、頂点ごとに前腕/上腕の変換を
+    // 重み（C.elbowBlend）で混ぜて変形する（前腕を振っても回しても肘で折れずに滑らかにつながる）
+    const mat = b.kind === 'artery' ? arteryMat : b.kind === 'graft' ? graftMat : veinMat;
+    { const sp = b.curve.getSpacedPoints(100); let mn = Infinity, mx = -Infinity; for (const p of sp) { mn = Math.min(mn, p.x); mx = Math.max(mx, p.x); }
+      b.blend = mn < C.ELBOW_X + 0.035 && mx > C.ELBOW_X - 0.035; b.foreSide = (mn + mx) / 2 >= C.ELBOW_X; }
+    const parent = b.blend ? blendGroup : b.foreSide ? group : upperGroup;
+    b.mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat); b.mesh.renderOrder = 2; parent.add(b.mesh);
     if (b.kind !== 'artery') { b.lumen = new THREE.Mesh(new THREE.BufferGeometry(), lumenMat); b.lumen.renderOrder = 1; parent.add(b.lumen); }
+    if (b.blend) { b.mesh.frustumCulled = false; if (b.lumen) b.lumen.frustumCulled = false; }
+  }
+  // 肘をまたぐ枝の変形: 基準姿勢の頂点（base）と重み（w）を覚えておき、skin(mU, mF) で前腕/上腕の変換を混ぜて位置と法線を書き換える
+  const skinned = [];
+  const prepSkin = mesh => {
+    const g = mesh.geometry, pos = g.attributes.position.array, nor = g.attributes.normal.array, n = g.attributes.position.count;
+    const w = new Float32Array(n); for (let i = 0; i < n; i++) w[i] = C.elbowBlend(pos[i * 3]);
+    skinned.push({ mesh, base: Float32Array.from(pos), baseN: Float32Array.from(nor), w });
+  };
+  let lastM = null;
+  const _sp = new THREE.Vector3(), _sq = new THREE.Vector3(), _sn = new THREE.Vector3(), _sm = new THREE.Vector3(), _ru = new THREE.Matrix3(), _rf = new THREE.Matrix3();
+  function skin(mU, mF) {
+    lastM = [mU, mF];
+    _ru.setFromMatrix4(mU); _rf.setFromMatrix4(mF);
+    for (const s of skinned) {
+      const pos = s.mesh.geometry.attributes.position, nor = s.mesh.geometry.attributes.normal, n = pos.count;
+      for (let i = 0; i < n; i++) {
+        const w = s.w[i], k = i * 3;
+        _sp.set(s.base[k], s.base[k + 1], s.base[k + 2]);
+        if (w <= 0) _sp.applyMatrix4(mU); else if (w >= 1) _sp.applyMatrix4(mF); else { _sq.copy(_sp).applyMatrix4(mF); _sp.applyMatrix4(mU).lerp(_sq, w); }
+        pos.setXYZ(i, _sp.x, _sp.y, _sp.z);
+        _sn.set(s.baseN[k], s.baseN[k + 1], s.baseN[k + 2]);
+        if (w <= 0) _sn.applyMatrix3(_ru); else if (w >= 1) _sn.applyMatrix3(_rf); else { _sm.copy(_sn).applyMatrix3(_rf); _sn.applyMatrix3(_ru).lerp(_sm, w).normalize(); }
+        nor.setXYZ(i, _sn.x, _sn.y, _sn.z);
+      }
+      pos.needsUpdate = true; nor.needsUpdate = true;
+    }
   }
   let geomVersion = 0;
   const rebuild = () => {
+    skinned.length = 0;
     for (const b of branches) {
       const n = Math.max(24, Math.round(b.len / 0.004));
       // 表示用の筒は実際の径より 2.2mm 太い（皮膚の下 0.8mm にある静脈が、駆血で怒張すると皮膚から盛り上がって透けて見える。判定・エコーは rAt の径）
       const rShow = (b.kind === 'vein' && !b.comitant) ? (t => b.rAt(t) + 0.0022) : b.kind === 'graft' ? (t => b.rAt(t) + 0.0036) : b.rAt;
       b.mesh.geometry.dispose(); b.mesh.geometry = varTube(b.curve, n, rShow, 14);
       if (b.lumen) { b.lumen.geometry.dispose(); b.lumen.geometry = varTube(b.curve, Math.max(24, Math.round(b.len / 0.006)), t => b.rAt(t) * 0.45, 8); }
+      if (b.blend) { prepSkin(b.mesh); if (b.lumen) prepSkin(b.lumen); }
     }
+    if (lastM) skin(lastM[0], lastM[1]);
     geomVersion++;
   };
   let dilation = 1;
   // 駆血による怒張: 静脈の半径を倍率で変える（互換用に setRadius(r) も受け付ける）
   function setDilation(f) {
-    if (Math.abs(f - dilation) < 0.003) return;
+    if (Math.abs(f - dilation) < 0.012) return;   // 1.2% 未満の変化では作り直さない（駆血の遷移中に毎フレーム全枝を再生成しない）
     dilation = f;
     for (const b of branches) if (b.kind === 'vein') b.scale = f;
     rebuild();
@@ -255,6 +291,19 @@ export function createVessel(type, opts = {}) {
     return { d: Math.sqrt(best), point: s.p, horiz: _tmp.length(), index: bi, tangent: s.tangent, r: s.branch.rAt(s.t), sten: s.branch.stenosisAt(s.t), kind: s.branch.kind, branch: s.branch };
   }
 
+  // 触知用: 点 p（皮膚の上の指先）の真下 3cm 以内にある穿刺対象の血管（静脈・グラフト。動脈・伴走静脈は除く）のうち、横ずれが最も小さいもの
+  function closestBelow(p) {
+    let best = null, bh = Infinity;
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i], b = s.branch;
+      if (b.kind === 'artery' || b.comitant) continue;
+      const dy = p.y - s.p.y; if (dy < -0.01 || dy > 0.03) continue;
+      const h = Math.hypot(p.x - s.p.x, p.z - s.p.z);
+      if (h < bh) { bh = h; best = s; }
+    }
+    return best ? { horiz: bh, point: best.p, r: best.branch.rAt(best.t), kind: best.branch.kind, branch: best.branch } : null;
+  }
+
   // エコー描画用の線分リスト（全枝、約 6mm 刻み）: { a, b, rA, rB, kind, mid }。描画側で走査面の近くのものだけ使う
   function segments() {
     const out = [];
@@ -267,7 +316,7 @@ export function createVessel(type, opts = {}) {
   }
 
   return {
-    type, cfg, deep, group, upperGroup, branches, sites, pickSites, setRadius, setDilation, closest, segments,
+    type, cfg, deep, group, upperGroup, blendGroup, skin, branches, sites, pickSites, setRadius, setDilation, closest, closestBelow, segments,
     get radius() { return C.VESSEL_R_DILATED * dilation; },
     get dilation() { return dilation; },
     get version() { return geomVersion; },

@@ -14,6 +14,25 @@ function make(w, h, draw, repeat = [1, 1], srgb = true) {
   return t;
 }
 const rnd = (a, b) => a + Math.random() * (b - a);
+// 高さ（明るい = 高い）を描いたキャンバスから法線マップを作る（タイル可能）。k = 高さの強さ
+function normalFrom(w, h, drawHeight, k = 2.2, repeat = [1, 1]) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, w, h);
+  drawHeight(ctx, w, h);
+  const src = ctx.getImageData(0, 0, w, h).data, out = ctx.createImageData(w, h), d = out.data;
+  const hAt = (x, y) => src[(((y + h) % h) * w + ((x + w) % w)) * 4] / 255;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = (hAt(x + 1, y) - hAt(x - 1, y)) * k, dy = (hAt(x, y + 1) - hAt(x, y - 1)) * k;
+    const l = Math.hypot(dx, dy, 1), i = (y * w + x) * 4;
+    d[i] = (-dx / l * 0.5 + 0.5) * 255; d[i + 1] = (-dy / l * 0.5 + 0.5) * 255; d[i + 2] = (1 / l * 0.5 + 0.5) * 255; d[i + 3] = 255;
+  }
+  ctx.putImageData(out, 0, 0);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]); t.anisotropy = 8;
+  return t;
+}
+// 粗さマップなど、色空間変換なしのグレースケール
+const gray = (w, h, draw, repeat = [1, 1]) => make(w, h, draw, repeat, false);
 
 function speckle(ctx, w, h, n, colors, rMin, rMax, alpha) {
   for (let i = 0; i < n; i++) {
@@ -48,22 +67,41 @@ export function createTextures() {
     speckle(c, w, h, 3000, ['#4b74b4', '#6c97d6'], 0.8, 2.2, 0.12);
   });
 
-  T.linoleum = make(512, 512, (c, w, h) => {
-    c.fillStyle = '#c8cdd1'; c.fillRect(0, 0, w, h);
-    speckle(c, w, h, 14000, ['#aeb6bc', '#e2e6e9', '#9aa3aa', '#d4d9dd'], 0.6, 2.4, 0.5);
-    c.strokeStyle = '#9ba3a9'; c.lineWidth = 3; c.globalAlpha = 0.7; c.strokeRect(1.5, 1.5, w - 3, h - 3); c.globalAlpha = 1;
+  // 床: 医療施設の長尺塩ビシート（テラゾー調のチップ、60cm ごとの継ぎ目）。法線マップ（継ぎ目の溝・ゆず肌）と粗さマップ（擦れた所は艶が落ちる）付き
+  T.linoleum = make(1024, 1024, (c, w, h) => {
+    c.fillStyle = '#cbd0d4'; c.fillRect(0, 0, w, h);
+    speckle(c, w, h, 26000, ['#aeb6bc', '#e6e9ec', '#9aa3aa', '#d6dbdf', '#b9c2c8'], 0.8, 3.2, 0.55);
+    speckle(c, w, h, 1800, ['#8e979e', '#f2f4f6'], 2.5, 6, 0.3);                       // 大きめのチップ
+    for (let i = 0; i < 60; i++) { c.globalAlpha = rnd(0.03, 0.08); c.fillStyle = '#6f777d'; const x = rnd(0, w), y = rnd(0, h); c.beginPath(); c.ellipse(x, y, rnd(20, 90), rnd(6, 18), rnd(0, 3.14), 0, Math.PI * 2); c.fill(); }   // 擦れ・汚れ
+    c.globalAlpha = 1; c.strokeStyle = '#a4acb2'; c.lineWidth = 4; c.globalAlpha = 0.8; c.strokeRect(2, 2, w - 4, h - 4); c.globalAlpha = 1;
+  }, [13, 13]);
+  T.floorNormal = normalFrom(512, 512, (c, w, h) => {
+    speckle(c, w, h, 12000, ['#7a7a7a', '#868686'], 1, 3, 0.6);                        // ゆず肌
+    c.fillStyle = '#5a5a5a'; c.fillRect(0, 0, w, 3); c.fillRect(0, 0, 3, h); c.fillRect(0, h - 3, w, 3); c.fillRect(w - 3, 0, 3, h);   // 継ぎ目の溝
+  }, 1.6, [13, 13]);
+  T.floorRough = gray(512, 512, (c, w, h) => {
+    c.fillStyle = '#6a6a6a'; c.fillRect(0, 0, w, h);                                      // 基本の粗さ（やや艶あり）
+    speckle(c, w, h, 6000, ['#5c5c5c', '#787878'], 1, 4, 0.5);
+    for (let i = 0; i < 50; i++) { c.globalAlpha = rnd(0.15, 0.35); c.fillStyle = '#9a9a9a'; const x = rnd(0, w), y = rnd(0, h); c.beginPath(); c.ellipse(x, y, rnd(20, 90), rnd(6, 18), rnd(0, 3.14), 0, Math.PI * 2); c.fill(); }   // 擦れた所は艶が落ちる
+    c.globalAlpha = 1;
   }, [13, 13]);
 
   T.wall = make(512, 512, (c, w, h) => {
     c.fillStyle = '#eef0eb'; c.fillRect(0, 0, w, h);
     speckle(c, w, h, 6000, ['#e2e5df', '#f7f8f4'], 1, 4, 0.25);
   }, [4, 2]);
+  T.wallNormal = normalFrom(512, 512, (c, w, h) => { speckle(c, w, h, 16000, ['#747474', '#8c8c8c'], 0.8, 2.6, 0.5); }, 1.2, [4, 2]);   // 塗装壁の細かな凹凸
 
   T.ceiling = make(512, 512, (c, w, h) => {
     c.fillStyle = '#f3f4f2'; c.fillRect(0, 0, w, h);
     speckle(c, w, h, 9000, ['#e3e5e2', '#ffffff', '#d8dbd7'], 0.6, 2, 0.5);
+    speckle(c, w, h, 700, ['#cfd3cf'], 1, 6, 0.5);                                        // 岩綿吸音板の虫食い模様
     c.strokeStyle = '#c3c7c3'; c.lineWidth = 4; c.strokeRect(2, 2, w - 4, h - 4);
   }, [13, 13]);
+  T.ceilingNormal = normalFrom(512, 512, (c, w, h) => {
+    speckle(c, w, h, 700, ['#5e5e5e'], 1, 6, 0.6);
+    c.fillStyle = '#505050'; c.fillRect(0, 0, w, 5); c.fillRect(0, 0, 5, h); c.fillRect(0, h - 5, w, 5); c.fillRect(w - 5, 0, 5, h);   // 目地の溝
+  }, 1.8, [13, 13]);
 
   T.blanket = make(512, 512, (c, w, h) => {
     c.fillStyle = '#cfe2d3'; c.fillRect(0, 0, w, h);
@@ -74,12 +112,27 @@ export function createTextures() {
     for (let y = 0; y < h; y += 32) for (let x = 0; x < w; x += 32) c.fillRect(x + 4, y + 4, 24, 24);
     c.globalAlpha = 1;
   }, [6, 4]);
+  T.blanketNormal = normalFrom(512, 512, (c, w, h) => {   // ワッフル織りの凹凸 + 糸目
+    for (let y = 0; y < h; y += 32) for (let x = 0; x < w; x += 32) { const g = c.createRadialGradient(x + 16, y + 16, 2, x + 16, y + 16, 15); g.addColorStop(0, '#6a6a6a'); g.addColorStop(1, '#8e8e8e'); c.fillStyle = g; c.fillRect(x + 3, y + 3, 26, 26); }
+    weave(c, w, h, 4, 0.25, '#6e6e6e');
+  }, 2.0, [6, 4]);
 
   T.sheet = make(512, 512, (c, w, h) => {
     c.fillStyle = '#f5f6f6'; c.fillRect(0, 0, w, h);
     weave(c, w, h, 3, 0.05, '#8a9299');
     speckle(c, w, h, 2500, ['#e9ecee', '#ffffff'], 1, 4, 0.3);
   }, [5, 3]);
+  T.sheetNormal = normalFrom(512, 512, (c, w, h) => {   // 敷かれたシーツのゆるい皺（低周波の起伏）+ 織り目
+    const img = c.createImageData(w, h), d = img.data;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const u = x / w * Math.PI * 2, v = y / h * Math.PI * 2;
+      const hgt = 0.5 + 0.18 * Math.sin(u * 2 + Math.sin(v * 3) * 1.2) + 0.12 * Math.sin(v * 3 + Math.cos(u * 2) * 1.5) + 0.07 * Math.sin(u * 7 + v * 5);
+      const i = (y * w + x) * 4; d[i] = d[i + 1] = d[i + 2] = hgt * 255; d[i + 3] = 255;
+    }
+    c.putImageData(img, 0, 0);
+    weave(c, w, h, 3, 0.1, '#606060');
+  }, 1.6, [5, 3]);
+  T.fabricNormal = normalFrom(256, 256, (c, w, h) => { weave(c, w, h, 3, 0.35, '#5a5a5a'); speckle(c, w, h, 2000, ['#8a8a8a'], 0.6, 1.4, 0.4); }, 1.4, [8, 8]);   // 布の織り目（パジャマ等）
 
   T.gown = make(512, 512, (c, w, h) => {
     c.fillStyle = '#cfe0f1'; c.fillRect(0, 0, w, h);
@@ -107,6 +160,15 @@ export function createTextures() {
     }
     c.globalAlpha = 1;
   }, [2, 1]);
+  T.stainlessNormal = normalFrom(512, 512, (c, w, h) => {   // ヘアライン（横方向の細かな筋）
+    for (let i = 0; i < 4000; i++) { c.globalAlpha = rnd(0.1, 0.4); c.fillStyle = Math.random() < 0.5 ? '#9a9a9a' : '#666666'; c.fillRect(0, Math.random() * h, w, rnd(0.5, 1.2)); }
+    c.globalAlpha = 1;
+  }, 0.9, [2, 1]);
+  T.vinyl = make(512, 256, (c, w, h) => {                 // アームレストの合皮（薄青、縫い目）
+    c.fillStyle = '#9dbfe0'; c.fillRect(0, 0, w, h);
+    speckle(c, w, h, 5000, ['#8fb3d6', '#abc9e6'], 0.8, 2.2, 0.3);
+    c.strokeStyle = '#6f93b8'; c.lineWidth = 2; c.setLineDash([6, 5]); c.beginPath(); c.moveTo(0, 24); c.lineTo(w, 24); c.moveTo(0, h - 24); c.lineTo(w, h - 24); c.stroke(); c.setLineDash([]);
+  }, [3, 1]);
 
   T.band = make(256, 256, (c, w, h) => {              // 駆血帯（伸縮バンド）
     c.fillStyle = '#2f4f8e'; c.fillRect(0, 0, w, h);
@@ -139,6 +201,7 @@ export function createTextures() {
     c.fillStyle = '#c3d9c6';
     for (let x = 0; x < w; x += 64) c.fillRect(x, 0, 20, h);
   }, [4, 2]);
+  T.curtainNormal = normalFrom(256, 256, (c, w, h) => { weave(c, w, h, 4, 0.3, '#5c5c5c'); }, 1.2, [4, 2]);
 
   T.pillow = make(512, 512, (c, w, h) => {
     c.fillStyle = '#f8f8f6'; c.fillRect(0, 0, w, h);
@@ -239,6 +302,9 @@ export function createTextures() {
     c.fillText('設定（押して切り替え → リセット）', w / 2, h / 2);
   });
   T.labels = { vessel: makeLabel(), needle: makeLabel(), depth: makeLabel() };
+  T.titleLabels = { vessel: makeLabel(), needle: makeLabel(), depth: makeLabel() };   // タイトル画面の大きなキー
+  T.titleHead = make(1024, 52, (c, w, h) => { c.clearRect(0, 0, w, h); c.fillStyle = '#cfe0f5'; c.font = 'bold 30px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('キーを指で押して設定を選び、下のスタートを押してください', w / 2, h / 2); });
+  T.titleStart = make(1024, 256, (c, w, h) => { c.clearRect(0, 0, w, h); c.fillStyle = '#ffffff'; c.font = 'bold 120px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('スタート', w / 2, h / 2 - 20); c.font = 'bold 36px sans-serif'; c.fillStyle = '#d8f5e2'; c.fillText('START — タッチして開始', w / 2, h / 2 + 82); });
 
   T.pouch = make(512, 384, (c, w, h) => {              // 個包装アルコール綿のパウチ（アルミ蒸着フィルム + 青の印刷）
     const g = c.createLinearGradient(0, 0, w, h); g.addColorStop(0, '#cfd4da'); g.addColorStop(0.45, '#f6f7f9'); g.addColorStop(1, '#c3c9d0');
@@ -263,6 +329,16 @@ export function createTextures() {
     c.fillStyle = '#fff'; c.font = '24px sans-serif'; c.fillText('パウダーフリー ・ 未滅菌 ・ 単回使用', w / 2, h - 20);
   });
 
+  T.okLabel = make(256, 256, (c, w, h) => {
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = '#ffffff'; c.font = 'bold 86px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText('OK', 128, 100); c.font = 'bold 44px sans-serif'; c.fillText('確認', 128, 178);
+  });
+  T.titleBtnLabel = make(256, 256, (c, w, h) => {   // サイドテーブルの赤いボタン: タイトル画面へ戻る
+    c.fillStyle = '#2b3038'; c.fillRect(0, 0, w, h);
+    c.fillStyle = '#fff'; c.font = 'bold 56px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText('TITLE', 128, 110); c.font = '34px sans-serif'; c.fillText('タイトルへ', 128, 175);
+  });
   T.resetLabel = make(256, 256, (c, w, h) => {
     c.fillStyle = '#2b3038'; c.fillRect(0, 0, w, h);
     c.fillStyle = '#fff'; c.font = 'bold 60px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';

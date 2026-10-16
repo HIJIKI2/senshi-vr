@@ -2,8 +2,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from './lib/OrbitControls.js';
 import { RoomEnvironment } from './lib/RoomEnvironment.js';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js';
 import * as C from './src/constants.js';
-import { createTextures } from './src/textures.js';
+import { createTextures, makeLabel } from './src/textures.js';
 import { buildRoom } from './src/room.js';
 import { buildPatient } from './src/patient.js';
 import { loadHand, loadTrackedHand, gripPose, XR_JOINTS } from './src/handmodel.js';
@@ -13,7 +14,7 @@ import {
   makeAlcoholPouch, setPouchTorn, setPouchTaken, makeSwab, makeGloveBox, makeGlove,
   makeResetButton, makeSettingsPanel,
 } from './src/tools.js';
-import { createEcho, makeProbe, makeProbeHolder, PRESS_MAX } from './src/echo.js';
+import { createEcho, makeProbe, makeProbeHolder, PRESS_MAX, veinFlatten } from './src/echo.js';
 
 const GRAB_DIST = 0.13;
 // 針を持つときの指の曲げ（親指と人差し指でつまむ「ピンチ」姿勢）
@@ -21,20 +22,27 @@ const GRAB_DIST = 0.13;
 // 針の持ち方（臨床の標準）: 金属翼状針は翼を折り畳んで親指と人差し指の腹で両側から挟む。留置針は内筒ハブ（後端の硬い部分）を同様に挟む。
 // 針の軸は人差し指の向きに沿って指先の先へ出し、刃面（翼の面）は手の甲側が上。中指以降は軽く曲げて患者の腕に「支え」を作れる程度に緩める
 // （値は ?debug=hand で親指先と人差し指先の距離を計測して決定: index 0.65 / thumbOpp 右 0.3・左 -0.15 で指先同士が約 9mm = 指の腹が触れ合う）
+// 中指〜小指は軽くこぶしを握る程度に曲げて掌の中へ収める（下へ開いていると患者の腕に当たって針が血管の深さまで届かない）
 const PINCH_CURL = {
-  right: { thumb: 1.0, index: 0.65, middle: 0.62, ring: 0.6, pinky: 0.6, thumbOpp: 0.3, thumbOppAxis: 'y' },
-  left: { thumb: 1.0, index: 0.65, middle: 0.62, ring: 0.6, pinky: 0.6, thumbOpp: -0.15, thumbOppAxis: 'y' },
+  right: { thumb: 1.0, index: 0.65, middle: 0.9, ring: 0.93, pinky: 0.95, thumbOpp: 0.3, thumbOppAxis: 'y' },
+  left: { thumb: 1.0, index: 0.65, middle: 0.9, ring: 0.93, pinky: 0.95, thumbOpp: -0.15, thumbOppAxis: 'y' },
+};
+// 浅い血管用の持ち方（グリップで持ったとき）: 親指と人差し指のつまみ方と針の向きは標準と同じで、中指〜小指だけを「パー」のように伸ばす。
+// 手の甲が少し自分に見える向きにすると、親指と人差し指の輪が一番下に来て、伸ばした指は腕に当たらず浅い角度で刺せる
+const OK_CURL = {
+  right: { ...PINCH_CURL.right, middle: 0.04, ring: 0.02, pinky: 0.02 },
+  left: { ...PINCH_CURL.left, middle: 0.04, ring: 0.02, pinky: 0.02 },
 };
 const NO_OPP = { thumbOpp: 0 };
 // エコープローブを持つ姿勢: 手全体で本体を握る（親指は手前の広い面、他の指は向こう側へ回り込み、掌に広い面が当たる）。
 // 小指側がレンズ面に近く、指はすべてレンズ面より上にある（参考: us-ism.com のプローブの持ち方の写真）
 const PROBE_CURL = {
-  right: { thumb: 0.6, index: 0.88, middle: 0.9, ring: 0.9, pinky: 0.9, thumbOpp: 0 },
-  left: { thumb: 0.6, index: 0.88, middle: 0.9, ring: 0.9, pinky: 0.9, thumbOpp: 0 },
+  right: { thumb: 0.7, index: 0.96, middle: 0.98, ring: 0.98, pinky: 0.98, thumbOpp: 0 },
+  left: { thumb: 0.7, index: 0.96, middle: 0.98, ring: 0.98, pinky: 0.98, thumbOpp: 0 },
 };
 const PROBE_HOLD_L = 0.07;    // 握りの中心からレンズ面までの距離: 握った手の小指側の下にヘッド（レンズ面）が出る（ヘッド 6cm・握りはその上の細い部分）
 // 握りの中心（gripSpace 座標）: 手のモデルの掌面は原点から掌側へ 23mm、曲げた指の先は 65mm にあるので、その間にプローブ本体（厚み 28mm）を置く
-const PROBE_FIST = { palm: 0.038, up: 0.005, thumb: 0.005 };
+const PROBE_FIST = { palm: 0.031, up: 0.005, thumb: 0.005 };   // 本体が薄く（14mm）なったので掌に近づける
 // 手の中でのプローブの向き（持ち手軸まわり）: 0 = 広い面が掌に当たり、走査面は手の長さ方向（実機で試してこちらが操作しやすいとのこと）。
 // π/2 にすると広い面が指先側を向き、走査面は掌の法線方向になる
 const PROBE_YAW = 0;
@@ -46,6 +54,8 @@ const POINT_CURL = { thumb: 0.8, index: 0.18, middle: 0.96, ring: 0.96, pinky: 0
 // 患者の手首を軽く握る姿勢（腕を持ち上げる）
 const WRIST_CURL = { thumb: 0.6, index: 0.7, middle: 0.75, ring: 0.75, pinky: 0.75 };
 const MAX_LIFT = 0.42;   // 前腕の持ち上げ上限（rad ≈ 24°）
+// 患者の腕の可動域（rad）: abduct = 肩を支点に腕全体を外（ユーザー側）へ広げる、yaw = 肘を支点に前腕を外へ振る、roll = 前腕の回内（母指側が上を向く）
+const ARM_LIMITS = { abduct: [-0.08, 0.75], yaw: [-0.3, 0.32], lift: [0, MAX_LIFT], roll: [-0.25, 1.6] };
 
 // ---------------------------------------------------------------- 設定（血管タイプ・針タイプ）と手順
 const config = { vessel: 'avf', needle: 'metal', deep: false };   // deep: 深い血管（透けて見えない。エコー下穿刺の練習）
@@ -82,7 +92,7 @@ function buildSteps() {
     { id: 'hygiene',    label: '手指衛生（速乾性手指消毒薬）', hint: '右のカートの端（ベッドから遠い側の開始セット）にある手指消毒薬のポンプヘッドを、手（掌や指先）で押し込みます（標準予防策）。' },
     { id: 'gloves',     label: '手袋を装着（両手）', hint: '開始セットの手袋の箱から手袋を引き出し（トリガーで持つ）、反対の手に近づけるとその手に装着されます。もう一方の手も同様に。', requires: ['hygiene'] },
     { id: 'auscult',    label: avg ? '聴診器でグラフト音を聴取' : '聴診器でシャント音を聴取', hint: 'カートの聴診器（チェストピース）をトリガーで持ち（持ったまま。離すときはもう一度トリガー）、垂れ下がったイヤーチップを自分の頭に近づけて装着し、ダイアフラムを前腕の血管に当てて 3 秒間聴診します。' + (avg ? '' : '手首側（吻合部）ほど音が大きくなります。'), requires: ['gloves'] },
-    { id: 'palpate',    label: avg ? 'グラフトを触知（スリル・走行確認）' : 'シャント血管を触知（スリル）', hint: '何も持っていない手の人差し指で前腕の血管に触れます。拍動に同期した振動（スリル）を 2〜3 秒確認します。', requires: ['gloves'] },
+    { id: 'palpate',    label: avg ? 'グラフトを触知（スリル・走行確認）' : 'シャント血管を触知（スリル）', hint: '何も持っていない手でトリガーかグリップを引いて人差し指を立て、指先を前腕の血管の真上の皮膚に当てます。この手順の間は、トリガーもグリップも握らない開いた手で前腕に触れるだけで拍動（スリル）が伝わります（血管から 1.5cm 以内）。1 秒確認します。この手順を終えると、トリガーかグリップで人差し指を立てた指先の真下に血管の内腔があるときだけ伝わるようになります（感じた所の真下へ垂直に刺せば血管に入る）。', requires: ['gloves'] },
     { id: 'open',       label: '穿刺セットを開封',           hint: '穿刺セットの箱に手を近づけてトリガーを引くと蓋が開きます。' },
     { id: 'sheet',      label: '滅菌シーツを腕の下に敷く',   hint: 'セット内の滅菌シーツ（緑）を持ち、患者の前腕の上で手を離すと腕の下に敷かれます。反対の手で患者の手首を持つ（トリガー）と前腕を持ち上げられるので、持ち上げて敷くとスムーズです。', requires: ['open'] },
     { id: 'disinfect',  label: '穿刺部をアルコール綿で消毒', hint: '開始セットのアルコール綿のパウチを持ち、反対の手で開封口に触れてトリガーを引くと破れます。もう一度トリガーで中の綿を取り出し、穿刺予定部位を中心に外側へ円を描くように（直径 5〜7cm）消毒します。乾燥を待ってから穿刺。', requires: ['sheet'] },
@@ -100,6 +110,10 @@ function buildSteps() {
   ];
 }
 // （STEPS は init() で患者・血管を作ってから buildSteps() で生成する）
+
+// ---------------------------------------------------------------- タイトル画面（白い部屋にロゴ・設定パネル・スタート）
+// 起動時と VR 開始時はタイトル画面。スタートを押すと透析室が現れ、設定どおりに最初から開始する。確認用パラメータ（test/debug/demo/cam など）があるときは最初から透析室
+let titleMode = false, title = null;
 
 // ---------------------------------------------------------------- 状態
 const state = {};
@@ -128,6 +142,7 @@ function completeStep(id) {
   state.done[id] = true;
   if (missing.length) { state.score -= 5; addLog(`手順の順番が違います（先に「${STEPS.find(s => s.id === missing[0]).label}」）−5`, 'warn'); }
   addLog(`✔ ${STEPS[idx].label}`, 'ok');
+  cue('ok');
   checkFinished();
   uiDirty = true;
 }
@@ -137,7 +152,7 @@ function checkFinished() {
     addLog(`トレーニング終了  スコア ${state.score} 点`, 'ok');
   }
 }
-const penalty = (pts, msg) => { state.score -= pts; addLog(`${msg} −${pts}`, 'bad'); };
+const penalty = (pts, msg) => { state.score -= pts; addLog(`${msg} −${pts}`, 'bad'); cue('bad'); };
 
 // ---------------------------------------------------------------- セットアップ
 let renderer, scene, camera, dolly, clock, orbit, uiDirty = true, T, P, room, setBox, settings, gloveMat, skinMat, steth, gloveBox, echo;
@@ -153,9 +168,10 @@ function init() {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;      // Quest の GPU 負荷を抑える（ソフト PCF はサンプル数が多い）。normalBias でアクネを防ぐ
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType('local-floor');
+  renderer.xr.setFoveation(1.0);                        // 視野周辺の解像度を落として GPU 負荷を下げる（Quest の固定中心窩レンダリング）
   document.body.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
@@ -179,9 +195,9 @@ function init() {
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.near = 0.5; sun.shadow.camera.far = 9;
-  sun.shadow.camera.left = sun.shadow.camera.bottom = -3.2;
-  sun.shadow.camera.right = sun.shadow.camera.top = 3.2;
-  sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.01;
+  sun.shadow.camera.left = sun.shadow.camera.bottom = -2.4;   // 影の範囲は作業域（ベッド・装置・カート）に絞る → 同じ解像度で影が細かい
+  sun.shadow.camera.right = sun.shadow.camera.top = 2.4;
+  sun.shadow.bias = -0.0003; sun.shadow.normalBias = 0.015;
   scene.add(sun);
   const fill = new THREE.PointLight(0xfff2e0, 0.5, 6, 1.5); fill.position.set(-0.5, 2.3, 0.8); scene.add(fill);
 
@@ -191,6 +207,7 @@ function init() {
   skinMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, map: T.skin, normalMap: T.skinNormal, normalScale: new THREE.Vector2(0.35, 0.35), roughness: 0.58, sheen: 0.25, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xffd9c8), clearcoat: 0.04, clearcoatRoughness: 0.5 });
   room = buildRoom(scene, T);
   P = buildPatient(scene, T, config.vessel, { deep: config.deep });
+  room.lines.hookAt = (c, out) => P.toWorld(c, out);   // 患者側回路が手に掛かる位置は腕の姿勢に追従
   echo = createEcho(renderer, T);
   buildTools();
   { const seed = new URLSearchParams(location.search).get('seed'); if (seed !== null) P.vessel.pickSites(Number(seed)); }   // 穿刺部位の組み合わせを固定（確認用）
@@ -199,6 +216,9 @@ function init() {
   setupControllers();
   setupVRButton();
   updateSettingLabels();
+  buildIntro();
+  buildTitle();
+  { const q = new URLSearchParams(location.search); const debugging = ['test', 'debug', 'demo', 'cam', 'pose', 'place', 'lift', 'stats'].some(k => q.has(k)); if (q.get('title') === '1' || !debugging) returnToTitle(true); }   // 起動時も赤いボタンと同じ経路でタイトルへ（位置・見た目を同じにする）
 
   const qs = new URLSearchParams(location.search);
   if (qs.get('cam')) {
@@ -222,6 +242,10 @@ function init() {
       const h = loadHand(side, gloveMat); const pose = gripPose(side);
       h.group.quaternion.copy(pose.quaternion); h.group.position.copy(pose.position);
       grip.add(h.group); scene.add(grip);
+      if (qs.get('tool') === 'steth') {   // 聴診器のチェストピースの持ち方（右手）
+        if (side === 'right') { const st = makeStethoscopeSet(); grip.add(st.chest); h.ready.then(() => stethPlacement(h, grip, grip, side, st.chest)); }
+        continue;
+      }
       if (qs.get('tool') === 'probe') {
         // プローブを持った姿勢（右手: 本番と同じ probePlacement で配置）。左手には手の甲にテープを 2 枚貼った状態
         if (side === 'right') { const pr = makeProbe(); grip.add(pr); h.ready.then(() => probePlacement(h, grip, grip, side, pr)); }
@@ -235,7 +259,7 @@ function init() {
       }
       const n = makeNeedle(type === 'metal' ? 0xd9303a : 0x2f6fd0, type); grip.add(n);
       if (qs.get('curl')) { const [i, m, r, p, o] = qs.get('curl').split(',').map(Number); PINCH_CURL[side] = { ...PINCH_CURL[side], index: i, middle: m, ring: r, pinky: p, thumbOpp: (side === 'right' ? 1 : -1) * o }; }
-      h.ready.then(() => { setWingsFolded(n, true); pinchPlacement(h, grip, grip, side, n, n); });
+      h.ready.then(() => { setWingsFolded(n, true); pinchPlacement(h, grip, grip, side, n, n, qs.get('hold') === 'ok' ? OK_CURL[side] : PINCH_CURL[side]); });
     }
   } else if (qs.get('debug') === 'hand') {
     // 指の曲げ値の確認: 右手を並べ、親指先（赤）と人差し指先（緑）に印
@@ -261,6 +285,16 @@ function init() {
         grip.updateMatrixWorld(true);
         const gap = h.tips.thumb.getWorldPosition(new THREE.Vector3()).distanceTo(h.tips.index.getWorldPosition(new THREE.Vector3()));
         console.log(`[hand] side=${side} thumb=${th} index=${ic.toFixed(2)} opp=${op} axis=${oa} tipGap=${(gap * 1000).toFixed(1)}mm`);
+        if (r === 0 && i === 0) {   // 人差し指の先の関節（tip ボーン）からメッシュの先端までの距離を計測（触知点の補正用）
+          const tipB = h.tips.index, dipB = h.bones.index[h.bones.index.length - 2];
+          const tip = tipB.getWorldPosition(new THREE.Vector3()), dip = dipB.getWorldPosition(new THREE.Vector3()), dir = tip.clone().sub(dip).normalize();
+          let maxAlong = -1, maxDown = 0; const v = new THREE.Vector3(), d = new THREE.Vector3();
+          h.group.traverse(o => {
+            if (!o.isSkinnedMesh) return; o.skeleton.update(); const pos = o.geometry.attributes.position;
+            for (let k = 0; k < pos.count; k++) { v.fromBufferAttribute(pos, k); o.applyBoneTransform(k, v); o.localToWorld(v); d.subVectors(v, tip); const along = d.dot(dir); const lat = d.clone().addScaledVector(dir, -along).length(); if (lat < 0.012 && along > maxAlong) maxAlong = along; }
+          });
+          console.log(`[tipext] side=${side} mesh beyond tip joint=${(maxAlong * 1000).toFixed(1)}mm dipToTip=${(tip.distanceTo(dip) * 1000).toFixed(1)}mm`);
+        }
       });
     }));
   } else if (qs.get('debug')) {
@@ -271,11 +305,13 @@ function init() {
     dl.ready.then(h => h.setCurl({ thumb: 0.1, index: 0.1, middle: 0.2, ring: 0.2, pinky: 0.2 }));
     scene.add(dr.group); scene.add(dl.group);
   }
+  if (qs.get('stats') === '1') setTimeout(() => { const r = renderer.info.render; console.log(`[stats] calls=${r.calls} triangles=${r.triangles} geometries=${renderer.info.memory.geometries} textures=${renderer.info.memory.textures}`); }, 2500);
   if (qs.get('demo')) setTimeout(demoState, 500);
   if (qs.get('debug') === 'echo') setTimeout(() => debugEcho(qs), 600);   // プローブを腕に当てた状態（axis=short|long, needle=1）
   if (qs.get('test') === 'grab') setTimeout(selfTestGrab, 800);
   if (qs.get('place') === 'probe') setTimeout(() => { const pr = tools.probe; pr.obj.position.set(0.5, 1.0, -0.95); pr.obj.rotation.set(0.4, 0.7, 0.3); placeProbe(pr); const o2 = tools.tablet; }, 600);   // プローブをベッドの上に置いた状態（確認用）          // 全器具の「掴む」自己テスト（結果はコンソールへ）
   if (qs.get('lift')) P.setLift(Number(qs.get('lift')));   // 前腕の持ち上げ確認（rad）
+  if (qs.get('pose')) { const [abduct, yaw, lift, roll] = qs.get('pose').split(',').map(Number); P.setPose({ abduct: abduct || 0, yaw: yaw || 0, lift: lift || 0, roll: roll || 0 }); }   // 腕の姿勢（rad）の確認用
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -315,8 +351,8 @@ function removeTool(name) {
 function createNeedles() {
   removeTool('needleA'); removeTool('needleV');
   const yaw = C.TRAY.yaw, tp = C.trayPos;
-  registerTool('needleA', makeNeedle(0xd9303a, config.needle), { pos: tp(0.25, 0.004, 0.07), rotY: -Math.PI / 2 + yaw, gripPos: [0, -0.012, -0.05], kind: 'needle', site: 'A' });
-  registerTool('needleV', makeNeedle(0x2f6fd0, config.needle), { pos: tp(0.25, 0.004, 0.14), rotY: -Math.PI / 2 + yaw, gripPos: [0, -0.012, -0.05], kind: 'needle', site: 'V' });
+  registerTool('needleA', makeNeedle(0xd9303a, config.needle), { pos: tp(-0.14, 0.004, 0.07), rotY: -Math.PI / 2 + yaw, gripPos: [0, -0.012, -0.05], kind: 'needle', site: 'A' });   // 針はゼリーの隣（患者に近い側）。金属針はチューブ込みで 18cm あるので、プローブ立てと重ならない位置
+  registerTool('needleV', makeNeedle(0x2f6fd0, config.needle), { pos: tp(-0.14, 0.004, 0.14), rotY: -Math.PI / 2 + yaw, gripPos: [0, -0.012, -0.05], kind: 'needle', site: 'V' });
 }
 
 // 物理ボタン（指先で押し込むと沈み、底まで押すと動作）
@@ -327,7 +363,7 @@ function registerButton(name, holder, onPress, extra = {}) {
     name, cap, rest: cap.position.clone(),
     axis: new THREE.Vector3().fromArray(extra.axis || ud.axis || [0, -1, 0]).normalize(),
     topOffset: new THREE.Vector3().fromArray(extra.topOffset || ud.topOffset || [0, 0, 0]),
-    travel: extra.travel ?? ud.travel ?? 0.006, hitR: extra.hitR ?? ud.hitR ?? 0.03,
+    travel: extra.travel ?? ud.travel ?? 0.006, hitR: extra.hitR ?? ud.hitR ?? 0.03, hitBox: extra.hitBox || ud.hitBox || null,   // hitBox: [半幅 x, 半幅 z]（キャップのローカル座標で矩形判定。隣のキーを巻き込まない）
     palm: !!(extra.palm ?? ud.palm),   // 掌でも押せる（指差し姿勢でなくてもよい）
     onPress, depth: 0, latched: false, by: null,
   };
@@ -344,7 +380,7 @@ function buildTools() {
   steth.tube = new THREE.Mesh(new THREE.BufferGeometry(), steth.tubeMat); steth.tube.visible = false; steth.tube.frustumCulled = false; scene.add(steth.tube);
   scene.add(steth.binaural);
   registerTool('stethoscope', steth.chest, { pos: tp(-0.17, 0.004, -0.1), rotY: yaw, gripPos: [0, -0.02, -0.07], toggle: true });
-  registerTool('tourniquet', makeTourniquet(T, P.tourniquet.r), { pos: tp(-0.25, 0, 0.17), rotY: yaw, gripPos: [0, -0.01, -0.07] });
+  registerTool('tourniquet', makeTourniquet(T, P.tourniquet.r), { pos: tp(0.14, 0, 0.17), rotY: yaw, gripPos: [0, -0.01, -0.07] });   // 前列: ゼリー → 針 → テープ → 駆血帯 の順（患者側から）
   createNeedles();
 
   setBox = makeSetBox(T);
@@ -366,7 +402,7 @@ function buildTools() {
   gloveBox = makeGloveBox(T); gloveBox.position.fromArray(tp(0.46, 0, -0.1)); gloveBox.rotation.y = yaw; scene.add(gloveBox);
   // 次の手袋は取り出し口から指先を上にして顔を出している（穿刺者側へ少し傾く）
   const slot = gloveBox.localToWorld(gloveBox.userData.slot.clone());
-  registerTool('glove', makeGlove(gloveMat), { pos: [slot.x, slot.y, slot.z], quat: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), new THREE.Vector3(-0.45, 0.85, 0.1).normalize()), gripPos: [0, -0.01, -0.05], gripEuler: [Math.PI / 2, 0, 0], kind: 'glove' });
+  registerTool('glove', makeGlove(gloveMat), { pos: [slot.x, slot.y + 0.02, slot.z], rotY: 0.4, gripPos: [0, -0.01, -0.05], kind: 'glove', grabR: 0.1 });   // 取り出し口から顔を出したくしゃくしゃの手袋の塊
   const basin = tp(-0.15, -0.42, 0.1);   // 使用済みの綿・パウチは下段の膿盆へ
   for (let i = 0; i < 2; i++) {
     registerTool('pouch' + i, makeAlcoholPouch(T), { pos: tp(0.41 + i * 0.065, 0.003, 0.2 - i * 0.004), rotY: yaw + 0.1 * (i - 0.5), gripPos: [0, -0.012, -0.05], gripEuler: [0, Math.PI / 2, 0], kind: 'pouch' });
@@ -374,17 +410,17 @@ function buildTools() {
     registerTool('swab' + i, makeSwab(), { pos: [basin[0] + i * 0.03, basin[1], basin[2]], rotY: yaw, gripPos: [0, -0.012, -0.05], locked: true, kind: 'cotton' });
     tools['swab' + i].obj.visible = false;
   }
-  for (let i = 0; i < 4; i++) registerTool('tape' + i, makeTapeStrip(), { pos: tp(-0.12, 0.0015 + i * 0.001, 0.11 + i * 0.025), rotY: yaw, gripPos: [0, -0.015, -0.06], gripEuler: [0, Math.PI / 2, 0], kind: 'tape' });
+  for (let i = 0; i < 4; i++) registerTool('tape' + i, makeTapeStrip(), { pos: tp(0.0, 0.0015 + i * 0.001, 0.11 + i * 0.025), rotY: yaw, gripPos: [0, -0.015, -0.06], gripEuler: [0, Math.PI / 2, 0], kind: 'tape' });
   for (const site of ['A', 'V']) {
     const h = room.lines.home[site];
     const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), h.dir);
     registerTool('conn' + site, makeConnector(site === 'A' ? 0xd9303a : 0x2f6fd0), { pos: [h.pos.x, h.pos.y, h.pos.z], quat: q, gripPos: [0, -0.01, -0.06], kind: 'connector', site });
   }
 
-  // カート上のリセットボタン（前面寄り）
-  const reset = makeResetButton(T); reset.position.fromArray(tp(0.06, 0, 0.2)); reset.rotation.y = yaw; scene.add(reset);
-  registerButton('reset', reset, resetAll);
+  // リセットボタンはサイドテーブルのものだけ（カート上のものは撤去）
   registerButton('pump', room.pumpButton, startPump);
+  // プローブの ⏯ ボタン（指で押す）でもフリーズ／解除（ハンドトラッキングではグリップがないのでこちらを使う）
+  registerButton('probeFreeze', tools.probe.obj, by => toggleEchoFreeze(by), { cap: tools.probe.obj.userData.freezeBtn, topOffset: [0, 0, 0.001], travel: 0.002, hitR: 0.012, axis: [0, 0, -1] });
   // 手指消毒薬は指先でも掌でも押せる（トリガー不要）
   registerButton('sanitizer', room.sanitizer, () => { if (!state.done.hygiene) { addLog('手指衛生を実施 ✔', 'ok'); completeStep('hygiene'); } else addLog('手指衛生は実施済みです', 'info'); }, { palm: true });
 
@@ -402,8 +438,8 @@ function buildTools() {
   settings.group.position.set(ST.x - 0.07, ST.y + 0.01, ST.z); settings.group.rotation.y = ST.yaw;
   scene.add(settings.group);
   for (const b of settings.buttons) registerButton(b.name, settings.group, () => toggleSetting(b.name), b);
-  const reset2 = makeResetButton(T); reset2.position.set(ST.x + 0.12, ST.y + 0.01, ST.z - 0.09); reset2.rotation.y = ST.yaw; scene.add(reset2);
-  registerButton('reset2', reset2, resetAll);
+  const reset2 = makeResetButton(T, T.titleBtnLabel); reset2.position.set(ST.x + 0.12, ST.y + 0.01, ST.z - 0.09); reset2.rotation.y = ST.yaw; scene.add(reset2);
+  registerButton('title', reset2, returnToTitle);   // 設定キーを押すと物はリセットされるので、赤いボタンは「タイトル画面へ戻る」
 }
 
 // 指先がボタンのキャップに触れると押し込み量に応じて沈み、底付きで動作する
@@ -411,6 +447,7 @@ const _bv = new THREE.Vector3(), _bv2 = new THREE.Vector3(), _bv3 = new THREE.Ve
 const FINGER_R = 0.008, PALM_R = 0.022;
 function updateButtons(dt) {
   for (const b of pressables) {
+    if (b.enabled === false || !!b.title !== titleMode) continue;   // タイトル画面のキーはタイトル中だけ、他のボタンは透析室でだけ
     const parent = b.cap.parent;
     let target = 0, by = null;
     for (const cs of controllers) {
@@ -424,8 +461,10 @@ function updateButtons(dt) {
         _bv.sub(_bv2);
         const along = _bv.dot(b.axis) + R;                 // 押し込み方向の侵入量（指/掌の厚み分を加味）
         _bv3.copy(b.axis).multiplyScalar(along - R);
-        const lat = _bv.sub(_bv3).length();                // キャップ中心からの横ずれ
-        if (lat < b.hitR + (k ? 0.02 : 0) && along > -0.012 && along < b.travel + 0.035) {
+        _bv.sub(_bv3);                                     // キャップ中心からの横ずれ（ベクトル）
+        const m = k ? 0.02 : 0;
+        const inside = b.hitBox ? (Math.abs(_bv.x) < b.hitBox[0] + m && Math.abs(_bv.z) < b.hitBox[1] + m) : _bv.length() < b.hitR + m;
+        if (inside && along > -0.012 && along < b.travel + 0.035) {
           const d = Math.min(b.travel, Math.max(0, along));
           if (d > target) { target = d; by = cs; }
         }
@@ -437,6 +476,7 @@ function updateButtons(dt) {
     if (!b.latched && b.depth >= b.travel * 0.85) {
       b.latched = true;
       if (by) haptic(by, 0.6, 50);
+      cue('button');
       b.onPress(by);
     } else if (b.latched && b.depth < b.travel * 0.3) b.latched = false;
   }
@@ -506,7 +546,7 @@ function drawUI() {
   c.fillStyle = '#ffd166'; c.font = 'bold 24px sans-serif';
   wrap(c, state.finished ? '結果' : (cur ? `次: ${cur.label}` : ''), W - 650).forEach((l, i) => c.fillText(l, 616, 126 + i * 28));
   c.fillStyle = '#e8eef7'; c.font = '21px sans-serif';
-  const hint = state.finished ? `スコア ${Math.max(0, state.score)} 点。カートの赤いボタン、または B/Y ボタン長押しでリセットして再挑戦できます。左のサイドテーブルで血管・針のタイプを切り替えられます。` : (cur ? cur.hint : '');
+  const hint = state.finished ? `スコア ${Math.max(0, state.score)} 点。B/Y ボタン長押しでリセットして再挑戦、サイドテーブルの赤いボタンでタイトル画面へ戻れます。左のサイドテーブルで血管・針のタイプを切り替えられます。` : (cur ? cur.hint : '');
   wrap(c, hint, W - 650).forEach((l, i) => c.fillText(l, 616, 188 + i * 27));
   if (state.info) {
     c.fillStyle = '#9ad7ff'; c.font = 'bold 23px sans-serif';
@@ -519,8 +559,220 @@ function drawUI() {
     c.fillText(l.msg, 32, 572 + i * 33);
   });
   c.fillStyle = '#6f8aa6'; c.font = '19px sans-serif';
-  c.fillText('左スティック: 移動   右スティック: 向き（左右）/ 高さ（上下）   B または Y 長押し: リセット', 28, 742);
+  c.fillText(controllers.some(cs => cs.tracked) ? 'ハンドトラッキング: つまむ = 持つ/離す   人差し指でボタンを押す   水色の輪 = 今つまめる物   患者の手首・肘をつまんで腕を動かす' : '左スティック: 移動   右スティック: 向き（左右）/ 高さ（上下）   B または Y 長押し: リセット   患者の手首・肘を持って腕を動かす', 28, 742);
   uiTex.needsUpdate = true; uiDirty = false;
+}
+
+// ---------------------------------------------------------------- タイトル画面
+// 白い部屋。目の前の上にロゴ（厚みのある板）が浮かび、その下に「血管・針・深さ」を選ぶ大きなキー、さらに下に大きなスタートのキー。
+// キーは指先（または掌）で押す。スタートで透析室が現れ、立った姿勢の高さ・向きに合わせて開始位置に立つ
+const TITLE_START_EYE = 1.62;   // 立位想定の目の高さ [m]（座ったまま始めても、この高さまで持ち上げる）
+function buildTitle() {
+  const g = new THREE.Group(); g.visible = false; scene.add(g);
+  // 3D ロゴ: ロゴ画像から白背景を除いた輪郭（logo_shape.json: 外周と穴）を 7cm 押し出し、前面に元の絵柄（透明 PNG）を貼る。
+  // 側面は紺。幅 2.4m で目の前 2.6m・高さ 2.0m に浮かび、ゆっくり浮き沈みする
+  const slab = new THREE.Group(); slab.position.set(0, 2.5, -3.0); slab.rotation.x = -0.22; g.add(slab);
+  {
+    const LW = 5.4;   // 幅 5.4m（3.0m 先・高さ 2.5m に大きく浮かぶ）
+    const tex = new THREE.TextureLoader().load('./assets/ctrl/logo.png'); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+    const capM = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });   // 前面は元画像の色をそのまま（照明・トーンマッピングで白飛びしない）
+    const sideM = new THREE.MeshStandardMaterial({ color: 0x1b4f9a, roughness: 0.35, metalness: 0.25 });
+    fetch('./assets/ctrl/logo_shape.json').then(r => r.json()).then(d => {
+      const LH = LW / d.aspect, depth = 0.07;
+      tex.repeat.set(1 / LW, 1 / LH);   // 押し出し面の UV = 形の座標（m）→ 画像全体に対応
+      const geos = [];
+      for (const s of d.shapes) {
+        const shape = new THREE.Shape(s.outer.map(([x, y]) => new THREE.Vector2(x * LW, y * LH)));
+        for (const h of s.holes) shape.holes.push(new THREE.Path(h.map(([x, y]) => new THREE.Vector2(x * LW, y * LH))));
+        geos.push(new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.003, bevelSegments: 2, curveSegments: 4 }));
+      }
+      // 押し出しの「前後の面」と「側面」を別々に結合（mergeGeometries は形ごとの材質グループを作ってしまうので、面の種類ごとに分けてから結合）
+      const slice = (ge, grp) => { const out = new THREE.BufferGeometry(); for (const name of ['position', 'normal', 'uv']) { const a = ge.attributes[name]; out.setAttribute(name, new THREE.BufferAttribute(a.array.slice(grp.start * a.itemSize, (grp.start + grp.count) * a.itemSize), a.itemSize)); } return out; };
+      const caps = geos.map(ge => slice(ge, ge.groups[0])), sides = geos.map(ge => slice(ge, ge.groups[1]));
+      for (const [list, mat] of [[caps, capM], [sides, sideM]]) {
+        const geo = mergeGeometries(list, false); geo.translate(-LW / 2, -LH / 2, -depth / 2);
+        const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = true; slab.add(mesh);
+      }
+    }).catch(e => console.warn('logo shape load failed', e));
+  }
+  // 1 枚のパネル（手元: 前 0.5m・高さ 1.0m、面は 57° 上向きで術者を向く）: 上段に血管・針・深さの 3 キー、下段に大きなスタート
+  // 手を伸ばして触る距離（前 0.62m・高さ 1.05m）の小さめのパネル（幅 0.9m）。面は 57° 起こして術者を向く
+  const panel = new THREE.Group(); panel.position.set(0, 1.32, -0.6); panel.rotation.x = 1.1; g.add(panel);   // 胸の高さ（1.32m）。立位の目線（1.62m）から少し見下ろす位置
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1b2a44, roughness: 0.6 });
+  panel.add(new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.02, 0.4), dark).translateY(0.01));
+  const head = new THREE.Mesh(new THREE.PlaneGeometry(0.66, 0.033), new THREE.MeshBasicMaterial({ map: T.titleHead, transparent: true })); head.rotation.x = -Math.PI / 2; head.position.set(0, 0.021, -0.172); panel.add(head);
+  const keys = [['vessel', 0x1f5fb0, 0x163f78], ['needle', 0x1f8a68, 0x155f48], ['depth', 0x8a4aa8, 0x5e3274]];   // 白い部屋でも文字が読める濃い色
+  const KW = 0.21, KD = 0.15, GAP = 0.02, KZ = -0.06;
+  title = { group: g, slab, panel, buttons: [], t: 0 };
+  keys.forEach(([name, col, rim], i) => {
+    const x = (i - 1) * (KW + GAP);
+    const b = new THREE.Group(); b.position.set(x, 0.02, KZ);
+    b.add(new THREE.Mesh(new THREE.BoxGeometry(KW, 0.02, KD), new THREE.MeshStandardMaterial({ color: col, roughness: 0.4 })).translateY(0.01));
+    b.add(new THREE.Mesh(new THREE.BoxGeometry(KW + 0.004, 0.004, KD + 0.004), new THREE.MeshStandardMaterial({ color: rim, roughness: 0.5 })).translateY(0.002));
+    const lab = new THREE.Mesh(new THREE.PlaneGeometry(KW - 0.012, KD - 0.016), new THREE.MeshBasicMaterial({ map: T.titleLabels[name].texture, transparent: true })); lab.rotation.x = -Math.PI / 2; lab.position.y = 0.021; b.add(lab);
+    panel.add(b);
+    panel.add(new THREE.Mesh(new THREE.BoxGeometry(KW + 0.008, 0.003, KD + 0.008), new THREE.MeshStandardMaterial({ color: 0x0e1626 })).translateY(0.021).translateX(x).translateZ(KZ));
+    const btn = registerButton('title_' + name, panel, () => toggleTitleSetting(name), { cap: b, topOffset: [0, 0.021, 0], travel: 0.012, hitBox: [KW / 2, KD / 2] });   // 人差し指を立てた手（トリガー/グリップを握る）でだけ押せる。判定はキーの矩形の中だけ
+    btn.title = true; title.buttons.push(btn);
+  });
+  // スタート（同じパネルの下段、大きな緑のキー）
+  const SZ = 0.11;
+  const sb = new THREE.Group(); sb.position.set(0, 0.02, SZ);
+  sb.add(new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.025, 0.12), new THREE.MeshStandardMaterial({ color: 0x2ea85a, roughness: 0.35, emissive: 0x0b3a1c })).translateY(0.0125));
+  const sl = new THREE.Mesh(new THREE.PlaneGeometry(0.54, 0.105), new THREE.MeshBasicMaterial({ map: T.titleStart, transparent: true })); sl.rotation.x = -Math.PI / 2; sl.position.y = 0.026; sb.add(sl);
+  panel.add(sb);
+  panel.add(new THREE.Mesh(new THREE.BoxGeometry(0.57, 0.003, 0.13), new THREE.MeshStandardMaterial({ color: 0x0e1626 })).translateY(0.021).translateZ(SZ));
+  const startBtn = registerButton('title_start', panel, () => startGame(), { cap: sb, topOffset: [0, 0.026, 0], travel: 0.015, hitBox: [0.28, 0.06] });   // スタートもキーの矩形の中だけ（上段のキーを押してもスタートしない）
+  startBtn.title = true; title.buttons.push(startBtn);
+  drawTitleLabels();
+}
+function drawTitleLabels() {
+  T.titleLabels.vessel.draw('血管', config.vessel === 'avf' ? '自己血管\nAVF' : '人工血管\nAVG');
+  T.titleLabels.needle.draw('穿刺針', config.needle === 'metal' ? '金属翼状針' : 'カニューラ型\n留置針');
+  T.titleLabels.depth.draw('深さ', config.deep ? '深い\n（エコー下）' : '標準');
+}
+function toggleTitleSetting(name) {
+  if (name === 'vessel') config.vessel = config.vessel === 'avf' ? 'avg' : 'avf';
+  else if (name === 'needle') config.needle = config.needle === 'metal' ? 'cannula' : 'metal';
+  else config.deep = !config.deep;
+  P.setVesselType(config.vessel, { deep: config.deep });
+  updateSettingLabels(); drawTitleLabels();
+}
+// タイトル画面へ: 透析室の物をすべて隠し（照明と手は残す）、白い部屋にロゴとパネルだけ
+// サイドテーブルの赤いボタン: 物をリセットしてタイトル画面へ（VR 開始直後と同じく、ロゴとパネルが目の前に出る）
+function returnToTitle(initial = false) {
+  if (titleMode && !initial) return;
+  resetAll();
+  dolly.position.set(0, 0, 0); dolly.rotation.set(0, 0, 0); dolly.updateMatrixWorld(true);   // 立ち位置・高さ・向きを起動時と同じ原点に戻す
+  enterTitle();
+  title.pending = true;   // VR 中なら頭の追跡が有効になってから 2.5 秒間、頭の正面に追従して固定（起動時と同じ）
+  if (initial) { state.log.length = 0; uiDirty = true; }
+}
+function enterTitle() {
+  titleMode = true;
+  title.hidden = scene.children.filter(o => o !== title.group && o !== dolly && !o.isLight && o.visible);   // 隠した物だけをスタート時に戻す（元から非表示の物はそのまま）
+  for (const o of title.hidden) o.visible = false;
+  title.group.visible = true;
+  scene.background = new THREE.Color(0xffffff);
+  placeTitleInFront();
+}
+// ロゴとパネルを頭の向き・位置に合わせて目の前へ（VR 開始時の向きがどちらでも正面に出る）
+function placeTitleInFront() {
+  if (!renderer.xr.isPresenting) { title.group.position.set(0, 0, 0); title.group.rotation.y = 0; return; }   // デスクトップ: 原点で -z 向き
+  headPos(_v); camera.getWorldDirection(_v2); _v2.y = 0; if (_v2.lengthSq() < 1e-4) _v2.set(0, 0, -1); _v2.normalize();
+  title.group.position.set(_v.x, 0, _v.z); title.group.rotation.y = Math.atan2(-_v2.x, -_v2.z);
+  // 座ったまま始めたときはパネルの高さを目線に合わせる（立位 1.62m を基準）
+  const eye = renderer.xr.isPresenting ? _v.y - dolly.position.y : TITLE_START_EYE;
+  title.group.position.y = Math.min(0, eye - TITLE_START_EYE);
+}
+function startGame() {
+  if (!titleMode) return;
+  titleMode = false;
+  for (const o of title.hidden || []) o.visible = true;
+  title.group.visible = false;
+  scene.background = new THREE.Color(0xdfe6ec);
+  resetAll();
+  recenterPlayer();
+  addLog(`トレーニング開始: ${C.VESSEL_TYPES[config.vessel].label} / ${C.NEEDLE_TYPES[config.needle].label}` + (config.deep ? ' / 深い血管（エコー下）' : ''), 'ok');
+}
+// 開始位置: 術者はベッド脇の原点に立ち、ベッド（-z）を向く。頭の向きに合わせてドリーを回し、頭の水平位置を原点へ。
+// 目の高さが立位より低ければ（座ったまま等）、立位の目の高さ（1.62m）になるまで持ち上げる
+function recenterPlayer() {
+  if (!renderer.xr.isPresenting) return;
+  headPos(_v); camera.getWorldDirection(_v2); _v2.y = 0; _v2.normalize();
+  const yaw = Math.atan2(-_v2.x, -_v2.z);           // 頭の向き（-z を向いていれば 0）
+  dolly.rotateY(-yaw); dolly.updateMatrixWorld(true);
+  headPos(_v);
+  dolly.position.x -= _v.x; dolly.position.z -= _v.z;
+  const eyeLocal = _v.y - dolly.position.y;
+  dolly.position.y = eyeLocal < 1.5 ? TITLE_START_EYE - eyeLocal : 0;
+  dolly.updateMatrixWorld(true);
+}
+
+// ---------------------------------------------------------------- 操作説明（術者の真後ろの壁に大きく掲示。消えないので、振り向けばいつでも読める）
+// 左列: Meta Quest Touch Plus コントローラーのイラスト（左右）に各ボタンの役割、右列: ハンドトラッキングの手の形のイラストと説明
+let intro = null;
+// Meta Quest Touch Plus の製品写真（Meta の製品ページより。左右 1 枚ずつ）を板に貼り、ボタンの引き出し線を重ねる
+const CTRL_IMG = { right: './assets/ctrl/right.webp', left: './assets/ctrl/left.webp' };
+function drawControllerPhoto(c, img, x, y, size, side) {
+  c.fillStyle = '#eef1f4'; c.fillRect(x, y, size, size);
+  if (img) c.drawImage(img, x, y, size, size);
+  if (side !== 'right') return;
+  const k = size / 686;   // 写真の座標（686×686）→ 板の座標
+  const P = (px, py) => [x + px * k, y + py * k];
+  const label = (from, to, text, align) => {
+    c.strokeStyle = '#ffd166'; c.lineWidth = 3; c.beginPath(); c.moveTo(...from); c.lineTo(...to); c.stroke();
+    c.fillStyle = '#ffd166'; c.beginPath(); c.arc(from[0], from[1], 5, 0, Math.PI * 2); c.fill();
+    c.font = 'bold 26px sans-serif'; c.textAlign = align; c.textBaseline = 'middle'; c.fillText(text, to[0] + (align === 'left' ? 8 : -8), to[1]);
+  };
+  // 右コントローラー: ボタン・グリップは左へ、スティック・トリガーは右へ引き出す
+  label(P(310, 160), [x - 40, y + 30], 'B（長押しでリセット）', 'right');
+  label(P(345, 218), [x - 40, y + 95], 'A', 'right');
+  label(P(300, 360), [x - 40, y + 165], 'グリップ（中指）', 'right');
+  label(P(405, 155), [x + size + 20, y + 30], 'スティック', 'left');
+  label(P(380, 330), [x + size + 20, y + 185], 'トリガー（前面）', 'left');
+}
+function buildIntro() {
+  const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 1280;
+  const c = cv.getContext('2d');
+  c.fillStyle = '#0d1f36'; c.fillRect(0, 0, cv.width, cv.height);
+  c.fillStyle = '#1b3b5e'; c.fillRect(0, 0, cv.width, 120);
+  c.fillStyle = '#ffffff'; c.font = 'bold 64px sans-serif'; c.textBaseline = 'middle'; c.textAlign = 'left';
+  c.fillText('操作方法', 48, 60);
+  c.fillStyle = '#9fd3ff'; c.font = '34px sans-serif'; c.textAlign = 'right';
+  c.fillText('コントローラーを置いて手を出すと自動でハンドトラッキングに切り替わります（Quest 3）', cv.width - 48, 60);
+  const title = (x, text, color) => { c.textAlign = 'left'; c.fillStyle = color; c.font = 'bold 48px sans-serif'; c.fillText(text, x, 180); c.fillRect(x, 212, 940, 4); };
+  const lines = (x, y0, items, headW = 300) => {
+    let y = y0;
+    for (const [head, body] of items) {
+      c.textAlign = 'left'; c.fillStyle = '#ffd166'; c.font = 'bold 32px sans-serif'; c.fillText(head, x, y);
+      c.fillStyle = '#e8eef7'; c.font = '30px sans-serif';
+      const ls = wrap(c, body, 940 - headW);
+      ls.forEach((l, i) => c.fillText(l, x + headW, y + i * 36));
+      y += Math.max(1, ls.length) * 36 + 16;
+    }
+  };
+  // 左列: コントローラー（製品写真は読み込み後に描き足す）
+  title(64, 'コントローラー（Meta Quest Touch Plus）', '#7fe3ff');
+  const drawPhotos = imgs => {
+    c.fillStyle = '#0d1f36'; c.fillRect(64, 230, 940, 440);
+    drawControllerPhoto(c, imgs.right, 440, 240, 340, 'right');
+    drawControllerPhoto(c, imgs.left, 64, 470, 170, 'left');
+    c.fillStyle = '#9fb3c8'; c.font = '26px sans-serif'; c.textAlign = 'center'; c.fillText('右コントローラー', 610, 610);
+    c.textAlign = 'left'; c.font = '22px sans-serif'; c.fillText('左コントローラー', 248, 505); c.fillText('X / Y ボタン', 248, 537); c.fillText('左スティック = 移動', 248, 569); c.fillText('（配置は右と対称）', 248, 601);
+    tex.needsUpdate = true;
+  };
+  lines(64, 690, [
+    ['トリガー', '器具を持つ／離す。エコープローブと聴診器は持ったままになり、もう一度トリガーで離す。何も持たずに引くと人差し指が立ち、その指でボタン類を押せる（グリップでも可）'],
+    ['グリップ', '針をグリップで持つと浅い血管用の持ち方（つまみ方は同じで中指〜小指を伸ばし、親指と人差し指の輪を一番下にする）。留置針の内筒は、トリガー持ちならグリップ、グリップ持ちならトリガーで抜く。プローブ・聴診器を持っているときはトリガーと同じく離す'],
+    ['A / B・X / Y', 'エコープローブを持っている手の A か B（左手は X か Y）を押すと、エコーのフリーズ／解除'],
+    ['スティック', '左: 移動   右: 向き（左右）・高さ（上下）'],
+    ['B / Y 長押し', '最初からやり直す。サイドテーブルの赤いボタンはタイトル画面へ戻る（設定キーを押しても物はリセットされる）'],
+    ['患者の腕', '手首を持つ: 前腕を上げる・内外へ振る・手をひねると回内外。肘を持つ: 腕を肩から外へ広げる'],
+  ], 240);
+  // 右列: ハンドトラッキング
+  title(1064, 'ハンドトラッキング', '#9ff0b2');
+  lines(1064, 280, [
+    ['つまむ', '親指と人差し指の先を合わせる = 持つ／離す（プローブ・聴診器はもう一度つまんで離す）。針はつまんだ指先の先に出る'],
+    ['針の持ち方', '親指と人差し指でつかむ'],
+    ['水色の輪', '今つまめる物に輪が出る。輪が出た状態でつまむ'],
+    ['人差し指で押す', 'ボタン類はいつでも人差し指で押し込める。プローブの ⏯ ボタンを反対の手で押すとエコーのフリーズ／解除'],
+    ['手が隠れた時', '持っている物は落ちない。手が戻って次につまんだときに離す'],
+    ['移動', 'スティックがないので歩いて近づく。振動の代わりに音で知らせる'],
+    ['患者の腕', '手首や肘をつまんで動かす（コントローラーと同じ）'],
+  ], 240);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+  const imgs = {}; let loaded = 0;
+  drawPhotos(imgs);
+  for (const side of ['left', 'right']) { const im = new Image(); im.onload = () => { imgs[side] = im; if (++loaded === 2) drawPhotos(imgs); }; im.onerror = () => { if (++loaded === 2) drawPhotos(imgs); }; im.src = CTRL_IMG[side]; }
+  const g = new THREE.Group();
+  const W = 2.6, H = W * cv.height / cv.width;
+  const frame = new THREE.Mesh(new THREE.PlaneGeometry(W + 0.06, H + 0.06), new THREE.MeshStandardMaterial({ color: 0x24272c, roughness: 0.6 })); g.add(frame);
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: tex })); panel.position.z = 0.004; g.add(panel);
+  // 術者の真後ろの壁（+z 側, z = 3）。ユーザーは原点に立って -z を向くので、振り向くと正面に見える。下端は床から 0.8m
+  g.position.set(0.1, 0.8 + H / 2, 2.955); g.rotation.y = Math.PI;
+  scene.add(g);
+  intro = { group: g };
 }
 
 // ---------------------------------------------------------------- コントローラー（手として表示）
@@ -534,13 +786,11 @@ function setupControllers() {
       const h = loadHand(side, skinMat);   // 開始時は素手
       const pose = gripPose(side);
       h.group.quaternion.copy(pose.quaternion); h.group.position.copy(pose.position);
-      const holder = new THREE.Group(); holder.add(h.group);
-      const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.031, 0.033, 0.06, 20), skinMat); cuff.position.y = 0.1; holder.add(cuff);
-      const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.037, 0.07, 20), new THREE.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.95 })); sleeve.position.y = 0.16; holder.add(sleeve);
+      const holder = new THREE.Group(); holder.add(h.group);   // 手だけ（袖・手首の筒は付けない。ハンドトラッキングの見た目と同じ）
       grip.add(holder);
       const tracked = loadTrackedHand(side, skinMat);   // 実際の手の形で動くモデル（ハンドトラッキング時）
       tracked.group.visible = false; xrHand.add(tracked.group);
-      hands[side] = { api: h, holder, cuff, tracked };
+      hands[side] = { api: h, holder, tracked };
     }
     // ハンドトラッキング時は、関節から作った「仮想の gripSpace / targetRay」を cs.grip / cs.ctrl として使う。
     // コントローラー時と同じ座標系で器具を持たせるため（持つ位置・向きの計算は共通）
@@ -553,6 +803,7 @@ function setupControllers() {
       cs.inputSource = e.data; cs.tracked = !!e.data.hand; cs.lost = false;
       setHandSide(cs, e.data.handedness === 'left' ? 'left' : 'right');
       if (cs.tracked && !state.trackedNoticed) { state.trackedNoticed = true; addLog('ハンドトラッキング: 親指と人差し指をつまむ = トリガー（持つ／離す）。ボタンは人差し指で押す。移動はスティックがないので歩いて近づく', 'info'); }
+      uiDirty = true;
     });
     // 切断: ハンドトラッキングが途切れた（手がカメラの外へ出た）ときは持っている物を離さず、手が戻るのを待つ（戻ると同じ手として再接続され、持ったまま続けられる）。
     // コントローラーへ持ち替えたときは controller の connected で切り替わる
@@ -565,7 +816,7 @@ function setupControllers() {
     dolly.add(ctrl); dolly.add(grip);
     controllers.push(cs);
   }
-  renderer.xr.addEventListener('sessionstart', () => { initAudio(); orbit.enabled = false; });
+  renderer.xr.addEventListener('sessionstart', () => { initAudio(); orbit.enabled = false; setupFrameRate(); addLog('操作説明は真後ろの壁に掲示してあります（振り向くと見えます）', 'info'); if (titleMode) title.pending = true; });
   renderer.xr.addEventListener('sessionend', () => { orbit.enabled = true; });
 }
 function setHandSide(cs, side) {
@@ -583,12 +834,14 @@ function setHandSide(cs, side) {
   cs.wrist = false; cs.heldLost = false;
   if (cs.tracked) {
     cs.ctrl = cs.vctrl; cs.grip = cs.vgrip;
+    cs.vgrip.add(cs.hands[side].holder);   // コントローラー用の手（非表示）を仮想 gripSpace の下に置く: 針の持ち位置をこの手のつまみ位置で決める
     // targetRay 相当のフレーム（gripSpace 基準）: -Z = 指先方向, +Y = 手の甲側。右手と左手で甲の向きが逆
     const X = new THREE.Vector3(0, 0, side === 'right' ? 1 : -1), Y = new THREE.Vector3(side === 'right' ? 1 : -1, 0, 0), Z = new THREE.Vector3(0, 1, 0);
     cs.vctrl.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
-  } else { cs.ctrl = cs.xrCtrl; cs.grip = cs.xrGrip; }
+  } else { cs.ctrl = cs.xrCtrl; cs.grip = cs.xrGrip; cs.xrGrip.add(cs.hands[side].holder); }
   cs.ctrl.add(cs.toolRoot); cs.toolRoot.position.set(0, 0, 0);
   cs.lastPose = '';
+  cs.vgFilter?.p.reset(); cs.vgFilter?.q.reset();
 }
 // ハンドトラッキング: 関節の位置から仮想の gripSpace を作る（原点 = 握りの中心（指の付け根の中点から手首側へ 1cm）,
 // -Y = 手首 → 中指の付け根の方向（指先方向）, -Z = 親指側（人差し指 → 小指の逆）, X = 残り（右手は甲、左手は掌）。コントローラーの gripSpace と同じ規約）
@@ -598,7 +851,29 @@ const VGRIP_FIX = {
   left: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(-0.14, -0.96, -0.24).normalize(), 7.0 * Math.PI / 180),
 };
 const _vg = { w: new THREE.Vector3(), i: new THREE.Vector3(), k: new THREE.Vector3(), m: new THREE.Vector3(), x: new THREE.Vector3(), y: new THREE.Vector3(), z: new THREE.Vector3(), o: new THREE.Vector3(), mat: new THREE.Matrix4(), q: new THREE.Quaternion(), dq: new THREE.Quaternion() };
-function updateVirtualGrip(cs) {
+// One Euro フィルタ（Casiez 2012）: ゆっくり動かすときは強く平滑化してジッターを消し、速く動かすときは遅れが出ないようカットオフを上げる。
+// 位置（m）と向き（quaternion）に別々に掛ける。dt が無い/大きい（追跡が途切れた後）ときはそのまま通す（遅れを残さない）
+const euroAlpha = (cut, dt) => 1 / (1 + 1 / (2 * Math.PI * cut * dt));
+class EuroVec {
+  constructor(minCut, beta, dCut = 1) { this.mc = minCut; this.b = beta; this.dc = dCut; this.x = new THREE.Vector3(); this.dx = new THREE.Vector3(); this.t = new THREE.Vector3(); this.init = false; }
+  reset() { this.init = false; }
+  filter(v, dt) {
+    if (!this.init || !(dt > 0) || dt > 0.3) { this.x.copy(v); this.dx.set(0, 0, 0); this.init = true; return this.x; }
+    this.t.subVectors(v, this.x).divideScalar(dt); this.dx.lerp(this.t, euroAlpha(this.dc, dt));
+    this.x.lerp(v, euroAlpha(this.mc + this.b * this.dx.length(), dt)); return this.x;
+  }
+}
+class EuroQuat {
+  constructor(minCut, beta, dCut = 1) { this.mc = minCut; this.b = beta; this.dc = dCut; this.x = new THREE.Quaternion(); this.rate = 0; this.init = false; }
+  reset() { this.init = false; }
+  filter(q, dt) {
+    if (!this.init || !(dt > 0) || dt > 0.3) { this.x.copy(q); this.rate = 0; this.init = true; return this.x; }
+    const ang = 2 * Math.acos(Math.min(1, Math.abs(q.dot(this.x)))) / dt;   // 角速度 [rad/s]
+    this.rate += (ang - this.rate) * euroAlpha(this.dc, dt);
+    this.x.slerp(q, euroAlpha(this.mc + this.b * this.rate, dt)); return this.x;
+  }
+}
+function updateVirtualGrip(cs, dt = 0) {
   const j = cs.hand.joints; if (!j?.wrist || !cs.hand.loaded) return;
   j.wrist.getWorldPosition(_vg.w); j['index-finger-phalanx-proximal'].getWorldPosition(_vg.i); j['pinky-finger-phalanx-proximal'].getWorldPosition(_vg.k); j['middle-finger-phalanx-proximal'].getWorldPosition(_vg.m);
   _vg.y.subVectors(_vg.w, _vg.m).normalize();                                   // +Y = 指先 → 手首
@@ -608,6 +883,9 @@ function updateVirtualGrip(cs) {
   _vg.q.multiply(VGRIP_FIX[cs.side]);   // 向きの較正（コントローラー用の手のモデルで gripSpace と一致するよう、自己テストで求めた回転）
   // 原点: 人差し指と小指の付け根の中点から、指先側へ 4mm・親指側へ 6mm・手の甲側へ 10mm（コントローラー用の手のモデルで gripSpace 原点と一致するよう較正。自己テストで確認）
   _vg.o.addVectors(_vg.i, _vg.k).multiplyScalar(0.5).addScaledVector(_vg.y, -0.004).addScaledVector(_vg.z, -0.006).addScaledVector(_vg.x, cs.side === 'right' ? 0.010 : -0.010);
+  // 平滑化（ワールド座標で）: 位置 1.2Hz + 40Hz/(m/s)、向き 1.2Hz + 4Hz/(rad/s)
+  if (!cs.vgFilter) cs.vgFilter = { p: new EuroVec(1.2, 40), q: new EuroQuat(1.2, 4) };
+  _vg.o.copy(cs.vgFilter.p.filter(_vg.o, dt)); _vg.q.copy(cs.vgFilter.q.filter(_vg.q, dt));
   cs.vgrip.position.copy(dolly.worldToLocal(_vg.o));
   cs.vgrip.quaternion.copy(dolly.getWorldQuaternion(_vg.dq).invert().multiply(_vg.q));
   cs.vgripBase.copy(cs.vgrip.position);
@@ -628,7 +906,9 @@ function onSelectEndXR(cs) {
   onSelectEnd(cs);
 }
 function haptic(cs, intensity = 0.5, ms = 60) {
-  // Quest: gamepad.hapticActuators[0].pulse()。他機種向けに vibrationActuator / playEffect も試す（ハンドトラッキング中は振動なし）
+  // Quest: gamepad.hapticActuators[0].pulse()。他機種向けに vibrationActuator / playEffect も試す。
+  // ハンドトラッキング中は振動できないので、代わりに短い音（強さで高さ・長さが変わる）で「触れた・持った」を知らせる
+  if (cs.tracked || (!cs.inputSource?.gamepad && renderer.xr.isPresenting)) { cue('tick', intensity, ms); return; }
   const gp = cs.inputSource?.gamepad; if (!gp) return;
   const act = gp.hapticActuators?.[0] || gp.vibrationActuator;
   if (!act) return;
@@ -637,10 +917,18 @@ function haptic(cs, intensity = 0.5, ms = 60) {
     else if (act.playEffect) act.playEffect('dual-rumble', { duration: ms, strongMagnitude: intensity, weakMagnitude: intensity });
   } catch (e) { /* 非対応 */ }
 }
-function fingerTip(cs, out) {
-  const tip = cs.hand?.tips?.index;
-  return tip ? tip.getWorldPosition(out) : cs.ctrl.getWorldPosition(out);
+// 人差し指の先（メッシュの先端）。コントローラー用の手のモデルは tip ボーンが指先の 11mm 内側にあるので、末節の向きに沿って先端まで延ばす
+// （?debug=hand で計測: tip ボーンからメッシュ先端まで 11.1mm）。ハンドトラッキングの tip 関節は指先そのものなので補正しない
+const FK_TIP_EXT = 0.011, _ft = new THREE.Vector3();
+function fingerTipOf(cs, name, out) {
+  const tip = cs.hand?.tips?.[name];
+  if (!tip) return null;
+  tip.getWorldPosition(out);
+  const bones = cs.hand.bones?.[name];
+  if (!cs.tracked && bones?.length >= 2) { const dip = bones[bones.length - 2].getWorldPosition(_ft); out.addScaledVector(_ft.subVectors(out, dip).normalize(), FK_TIP_EXT); }
+  return out;
 }
+function fingerTip(cs, out) { return fingerTipOf(cs, 'index', out) || cs.ctrl.getWorldPosition(out); }
 // 掌の中心（gripSpace 原点から掌側へ 2cm: 右手は -X、左手は +X）
 function palmPoint(cs, out) {
   cs.grip.getWorldPosition(out);
@@ -655,7 +943,6 @@ function setGloved(side, on) {
     const H = cs.hands[side];
     H.api.group.traverse(o => { if (o.isMesh) o.material = m; });
     H.tracked.group.traverse(o => { if (o.isMesh) o.material = m; });
-    H.cuff.material = m;
   }
 }
 // 患者に触れる操作の前に手袋の装着を確認（未装着なら一度だけ減点）
@@ -689,17 +976,27 @@ function stickTapeOnHand(tool, oc) {
 const headPos = out => camera.getWorldPosition(out);
 
 function onSqueezeStart(cs) {
-  if (cs.held?.kind === 'needle' && cs.held.obj.userData.type === 'cannula' && cs.held.punctured) { withdrawStylet(cs.held, cs); return; }
+  if (titleMode) return;
+  if (cs.held?.kind === 'needle' && cs.held.obj.userData.type === 'cannula' && cs.held.punctured && cs.held.holdMode !== 'ok') { withdrawStylet(cs.held, cs); return; }
+  if (cs.held?.toggle) { releaseHeld(cs); return; }   // プローブ・聴診器を持っている手のグリップ = トリガーと同じ（離す）
   if (cs.held || cs.wrist) return;   // 持っている物を離すのはトリガーだけ
-  onSelectStart(cs);
+  cs.grabByGrip = true; onSelectStart(cs); cs.grabByGrip = false;   // グリップで針を持つと浅い血管用の持ち方
+}
+// ハンドトラッキング: 中指〜小指が伸びているか（中指の先が手首から 13cm 以上離れている。握ると 8〜10cm）
+function fingersExtended(cs) {
+  const j = cs.hand?.joints; if (!j?.wrist || !j['middle-finger-tip']) return false;
+  return j['middle-finger-tip'].getWorldPosition(_v3).distanceTo(j.wrist.getWorldPosition(_v4)) > 0.13;
 }
 function onSelectStart(cs) {
   initAudio();
-  cs.ctrl.getWorldPosition(_v);
+  if (titleMode) return;   // タイトル画面ではキーを指で押すだけ
+  grabPoint(cs, _v);
   // ハンドトラッキングの追跡が途切れている間も持ち続けた物: 手が戻って次につまんだときに離す
   if (cs.held && cs.heldLost) { cs.heldLost = false; releaseHeld(cs); return; }
   // プローブ・聴診器（長く使う器具）はトリガーで持ち、もう一度トリガーで離す
   if (cs.held?.toggle) { releaseHeld(cs); return; }
+  // グリップで持っている留置針（浅い血管用の持ち方）: トリガーで内筒を抜く
+  if (cs.held?.kind === 'needle' && cs.held.holdMode === 'ok' && cs.held.obj.userData.type === 'cannula' && cs.held.punctured && cs.squeezePressed) { withdrawStylet(cs.held, cs); return; }
   // トリガーで操作する対象（セット箱の開封。開封後は無効）。ボタン類は指で押し込む物理ボタン（updateButtons）
   if (cs.held) return;
   for (const it of interactables) {
@@ -715,17 +1012,12 @@ function onSelectStart(cs) {
     t.obj.localToWorld(_v2.set(0, 0, 0.03));
     if (Math.min(_v.distanceTo(_v2), _v3.distanceTo(_v2)) < 0.12) { withdrawStylet(t, cs); return; }
   }
-  // 金属針のクランプ（留置中・固定後）
-  for (const t of toolList) {
-    if (t.kind !== 'needle' || !t.obj.userData.clamp || !(t.stuck || t.held)) continue;
-    if (t.held === cs) continue;
-    t.obj.localToWorld(_v2.set(0.003, -0.007, 0.11));
-    if (_v.distanceTo(_v2) < 0.045) { toggleClamp(t); haptic(cs, 0.4, 40); return; }
-  }
+  // 金属針のクランプ（留置中・固定後）: 人差し指の先をクランプに近づけてトリガー
+  { const t = clampNear(cs); if (t) { toggleClamp(t); haptic(cs, 0.4, 40); return; } }
   // 装着中の駆血帯に手を近づけてトリガー → 外す（手に持った状態になる）
   {
     const tq = tools.tourniquet;
-    if (tq && tq.fixed && state.tourniquetOn && _v.distanceTo(P.tourniquet.pos) < 0.13) { removeTourniquet(cs); return; }
+    if (tq && tq.fixed && state.tourniquetOn && _v.distanceTo(P.tourniquetWorld(_v4)) < 0.13) { removeTourniquet(cs); return; }
   }
   // 反対の手が持っているアルコール綿のパウチに触れてトリガー → 開封 → 綿を取り出す
   for (const t of toolList) {
@@ -750,25 +1042,58 @@ function onSelectStart(cs) {
   }
   // 指先が物理ボタンのすぐ近くなら「押す」意図とみなし、近くの器具を誤って掴まない
   for (const b of pressables) {
+    if (b.enabled === false || !!b.title !== titleMode) continue;   // 隠れているタイトル画面のキーなどは対象外
     b.cap.parent.localToWorld(_v2.copy(b.rest).add(b.topOffset));
     if (_v3.distanceTo(_v2) < b.hitR + 0.04) return;
   }
-  // 患者の手首を持つ → 前腕を肘から持ち上げられる（針が刺さっている間は不可）
-  if (_v.distanceTo(P.wristNow(_v2)) < 0.1 && !toolList.some(t => t.kind === 'needle' && (t.stuck || t.punctured))) {
-    cs.wrist = true; cs.lastPose = ''; haptic(cs, 0.3, 30);
-    addLog('患者の手首を持ちました（上げると前腕が持ち上がります）', 'info');
-    return;
-  }
+  // 患者の手首を持つ → 前腕を動かせる（上げ下げ・内外に振る・手をひねると回内外）。肘のあたりを持つ → 腕全体を肩から外へ広げる（針が刺さっている間は不可）
+  const armPart = armHoldCandidate(cs, _v);
+  if (armPart) { startArmHold(cs, armPart); return; }
   // 最も近い器具を掴む（判定中心と半径は器具ごと。半径からの余裕が最も大きいものを選ぶ）
+  const best = nearestTool(cs, _v);
+  if (best) grab(cs, best);
+}
+// 人差し指の先から 4cm 以内にある金属針のクランプ（留置中、または反対の手が持っている針）。開け閉めの判定と水色の輪の表示に使う
+const CLAMP_LOCAL = new THREE.Vector3(0.003, -0.007, 0.11);
+function clampNear(cs, out = _v2) {
+  fingerTip(cs, _v3);
+  for (const t of toolList) {
+    if (t.kind !== 'needle' || !t.obj.userData.clamp || !(t.stuck || t.held) || t.held === cs) continue;
+    t.obj.localToWorld(out.copy(CLAMP_LOCAL));
+    if (_v3.distanceTo(out) < 0.04) return t;
+  }
+  return null;
+}
+// 掴む操作の基準点: ハンドトラッキングでは親指と人差し指の指先の中点（つまむ所）、コントローラーでは targetRay の原点（手の中）
+function grabPoint(cs, out) {
+  const tips = cs.tracked ? cs.hand?.tips : null;
+  if (tips?.thumb && tips?.index) { tips.thumb.getWorldPosition(out); return out.add(tips.index.getWorldPosition(_v4)).multiplyScalar(0.5); }
+  return cs.ctrl.getWorldPosition(out);
+}
+function nearestTool(cs, p) {
   let best = null, bestD = 0;
   for (const t of toolList) {
     if (t.held || t.fixed || t.locked || t.taped) continue;
     if (t.onHand === cs) continue;                       // 自分の手の甲に貼ったテープは反対の手で剥がす
     t.obj.localToWorld(_v2.copy(t.grabOffset));
-    const d = (t.onHand ? 0.06 : t.stuck ? 0.06 : t.grabR) - _v.distanceTo(_v2);   // 留置した針はハブのすぐ近くでだけ掴み直せる
+    const d = (t.onHand ? 0.06 : t.stuck ? 0.06 : t.grabR) - p.distanceTo(_v2);   // 留置した針はハブのすぐ近くでだけ掴み直せる
     if (d > bestD) { best = t; bestD = d; }
   }
-  if (best) grab(cs, best);
+  return best;
+}
+// 患者の腕を持てる所: 'wrist'（手首から 10cm）/ 'elbow'（肘から 9cm）。針が刺さっている・持って刺している間は動かせない
+function armHoldCandidate(cs, p) {
+  if (toolList.some(t => t.kind === 'needle' && (t.stuck || t.punctured))) return null;
+  if (p.distanceTo(P.wristNow(_v2)) < 0.1) return 'wrist';
+  if (p.distanceTo(P.elbowNow(_v2)) < 0.09) return 'elbow';
+  return null;
+}
+function startArmHold(cs, part) {
+  cs.wrist = part; cs.lastPose = ''; haptic(cs, 0.3, 30);
+  // 持った点と手の位置のずれを覚えておき、以後は「手の位置 − ずれ」を手首/肘の目標位置にする（持った瞬間に腕が跳ねない）
+  const anchor = part === 'wrist' ? P.wristNow(_v2) : P.elbowNow(_v2);
+  cs.armHold = { part, off: cs.ctrl.getWorldPosition(new THREE.Vector3()).sub(anchor), q0inv: cs.grip.getWorldQuaternion(new THREE.Quaternion()).invert(), roll0: P.pose.roll };
+  addLog(part === 'wrist' ? '患者の手首を持ちました（上げ下げ・内外に動かす・手をひねると前腕が回ります）' : '患者の肘を持ちました（外へ動かすと腕が肩から広がります）', 'info');
 }
 function grab(cs, tool) {
   // 留置した留置針の内筒がまだ入っている間は、ハブをつまむ = 内筒を抜く操作（針を掴み直すのは内筒抜去後）
@@ -778,14 +1103,24 @@ function grab(cs, tool) {
   resetHandPush(cs); cs.grip.updateMatrixWorld(true); cs.toolRoot.updateMatrixWorld(true);   // 腕からの押し戻しを戻した手を基準に持たせる（押し戻しは次のフレームで手と器具に一緒にかかる）
   cs.toolRoot.add(tool.obj);
   tool.obj.scale.setScalar(1);
-  if (tool.kind === 'needle' && cs.hand.loaded) {
-    // 親指と人差し指の指先の間に、翼（金属針）/ 内筒ハブ（留置針）が挟まる位置へ
+  if (tool.kind === 'needle' && cs.hands[cs.side].api.loaded) {
+    // 親指と人差し指の指先の間に、翼（金属針）/ 内筒ハブ（留置針）が挟まる位置へ。
+    // ハンドトラッキングでも「コントローラー用の手（ピンチ姿勢）」のつまみ位置を使う: 仮想 gripSpace はコントローラーの gripSpace に較正してあるので、
+    // 実際の指先のぶれや開き具合に関係なく、針は手に対してコントローラー時と同じ位置・向きに保たれる
     setWingsFolded(tool.obj, true);
-    pinchPlacement(cs.hand, cs.grip, cs.ctrl, cs.side, tool.obj, tool.obj);
+    // 持ち方: トリガーで持つ = 標準（中指〜小指は軽く握る）、グリップで持つ = 浅い血管用（OK サイン、中指〜小指は伸ばす）。
+    // ハンドトラッキングではつまんだ時に中指〜小指が伸びていれば浅い血管用
+    tool.holdMode = (cs.grabByGrip || (cs.tracked && fingersExtended(cs))) ? 'ok' : 'pinch';
+    pinchPlacement(cs.hands[cs.side].api, cs.grip, cs.ctrl, cs.side, tool.obj, tool.obj, tool.holdMode === 'ok' ? OK_CURL[cs.side] : PINCH_CURL[cs.side]);
     cs.lastPose = '';
   } else if (tool.kind === 'probe' && cs.hand.loaded) {
     // 先端近くを親指と人差し指・中指で挟む（ペングリップ）。手の中の位置は毎フレームの接触計算の基準にもなる
     probePlacement(cs.hand, cs.grip, cs.ctrl, cs.side, tool.obj);
+    tool.holdPos = tool.obj.position.clone(); tool.holdQuat = tool.obj.quaternion.clone();
+    cs.lastPose = '';
+  } else if (tool.name === 'stethoscope' && cs.hands[cs.side].api.loaded) {
+    // チェストピースの縁を親指と人差し指でつまむ（コントローラー用の手のつまみ位置で決める。ハンドトラッキングでも同じ）
+    stethPlacement(cs.hands[cs.side].api, cs.grip, cs.ctrl, cs.side, tool.obj);
     tool.holdPos = tool.obj.position.clone(); tool.holdQuat = tool.obj.quaternion.clone();
     cs.lastPose = '';
   } else {
@@ -803,8 +1138,8 @@ function grab(cs, tool) {
 // ピンチ姿勢の手で針をつまんだときの針の位置・向き（ctrl ローカル）。
 // 指先方向へ針先を向け、翼/ハブの「つまみ位置」を親指・人差し指の指先の中点に合わせる
 const _pp = { ti: new THREE.Vector3(), tt: new THREE.Vector3(), gq: new THREE.Quaternion(), fwd: new THREE.Vector3(), back: new THREE.Vector3(), x: new THREE.Vector3(), y: new THREE.Vector3(), z: new THREE.Vector3(), m: new THREE.Matrix4(), q: new THREE.Quaternion(), p: new THREE.Vector3(), cq: new THREE.Quaternion() };
-function pinchPlacement(hand, grip, ctrl, side, needleObj, out) {
-  hand.setCurl(PINCH_CURL[side]);
+function pinchPlacement(hand, grip, ctrl, side, needleObj, out, curl = PINCH_CURL[side]) {
+  hand.setCurl(curl);
   grip.updateMatrixWorld(true);
   hand.tips.index.getWorldPosition(_pp.ti); hand.tips.thumb.getWorldPosition(_pp.tt);
   // 挟む軸 = 親指の先 → 人差し指の先。折った翼（留置針では内筒ハブ）の両面がこの軸に垂直になるように針を置く
@@ -846,6 +1181,37 @@ function probePlacement(hand, grip, ctrl, side, out) {
   out.position.copy(ctrl.worldToLocal(origin));
   out.quaternion.copy(ctrl.getWorldQuaternion(_pr.cq).invert().multiply(_pr.q));
 }
+// 聴診器のチェストピースの持ち方: 親指と人差し指で縁をつまみ、他の指は軽く添える。膜面は掌の向き（回内位で下）、ステムは手首側へ
+const STETH_CURL = {
+  right: { thumb: 1.0, index: 0.6, middle: 0.7, ring: 0.75, pinky: 0.8, thumbOpp: 0.3, thumbOppAxis: 'y' },
+  left: { thumb: 1.0, index: 0.6, middle: 0.7, ring: 0.75, pinky: 0.8, thumbOpp: -0.15, thumbOppAxis: 'y' },
+};
+const _sp = { ti: new THREE.Vector3(), tt: new THREE.Vector3(), gq: new THREE.Quaternion(), palm: new THREE.Vector3(), fwd: new THREE.Vector3(), x: new THREE.Vector3(), y: new THREE.Vector3(), z: new THREE.Vector3(), m: new THREE.Matrix4(), q: new THREE.Quaternion(), cq: new THREE.Quaternion() };
+function stethPlacement(hand, grip, ctrl, side, out) {
+  hand.setCurl(STETH_CURL[side]);
+  grip.updateMatrixWorld(true);
+  hand.tips.index.getWorldPosition(_sp.ti); hand.tips.thumb.getWorldPosition(_sp.tt);
+  const pinch = _sp.ti.add(_sp.tt).multiplyScalar(0.5);                            // 指の腹が触れ合う点（チェストピースの縁）
+  grip.getWorldQuaternion(_sp.gq);
+  _sp.palm.set(side === 'right' ? -1 : 1, 0, 0).applyQuaternion(_sp.gq);           // 掌の法線
+  _sp.fwd.set(0, -1, 0).applyQuaternion(_sp.gq);                                   // 指先方向
+  _sp.y.copy(_sp.palm).negate();                                                   // チェストピース +Y（膜面は -Y = 掌の向き）
+  _sp.z.copy(_sp.fwd).negate(); _sp.z.addScaledVector(_sp.y, -_sp.z.dot(_sp.y)).normalize();   // ステム（+Z）は手首側へ
+  _sp.x.crossVectors(_sp.y, _sp.z).normalize();
+  _sp.q.setFromRotationMatrix(_sp.m.makeBasis(_sp.x, _sp.y, _sp.z));
+  // 中心: つまみ点から掌側へ 1cm・指先側へ 1.2cm（縁を指先でつまみ、本体は指の下に収まる）
+  const center = pinch.addScaledVector(_sp.palm, 0.01).addScaledVector(_sp.fwd, 0.012);
+  ctrl.updateMatrixWorld(true);
+  out.position.copy(ctrl.worldToLocal(center));
+  out.quaternion.copy(ctrl.getWorldQuaternion(_sp.cq).invert().multiply(_sp.q));
+}
+// エコーのフリーズ／解除（プローブを持っている間だけ）
+function toggleEchoFreeze(cs) {
+  if (!tools.probe?.held) return;
+  const frozen = echo.toggleFreeze();
+  if (cs) haptic(cs, frozen ? 0.6 : 0.3, 50);
+  addLog(frozen ? 'エコーをフリーズしました（画像が静止。持っている手の A/B（X/Y）でもう一度押すと解除）' : 'エコーのフリーズを解除しました', 'info');
+}
 // タブレットを立てる向き: 画面法線を dir（水平）へ向け、20° 後ろへもたれさせる
 const TABLET_LEAN = 0.35, TABLET_H = 0.168;
 function standingQuat(dir) {
@@ -859,7 +1225,8 @@ function supportY(x, z) {
   if (Math.abs(x - ST.x) < 0.21 && Math.abs(z - ST.z) < 0.15) return ST.y + 0.01;
   if (x > -1.05 && x < 1.05 && z > -1.45 && z < -0.45) {
     let y = C.BED_TOP;
-    if (x > -0.505 && x < 0.545 && z > -0.66 && z < -0.46) y = Math.max(y, C.BED_TOP + C.CUSHION_H);
+    const c = P.toArm(_v4.set(x, C.BED_TOP + 0.1, z), _v4);
+    if (c.x > -0.505 && c.x < 0.545 && Math.abs(c.z - C.ARM_Z) < 0.17) y = Math.max(y, C.BED_TOP + C.CUSHION_H);
     const b = P.blanketY(x, z); if (b !== null) y = Math.max(y, b);
     return y;
   }
@@ -894,14 +1261,15 @@ function placeProbe(tool) {
   echo.setActive(false);
   if (pos.distanceTo(tool.homePos) < 0.15) { returnHome(tool); addLog('プローブをプローブ立てに戻しました', 'info'); return; }
   scene.attach(o); o.scale.setScalar(1);
-  let s = supportY(pos.x, pos.z);
-  const a = C.armAt(pos.x);
-  if (C.onArm(pos.x) && Math.abs(pos.z - a.z) < a.r && P.lift < 0.02) s = Math.max(s, C.skinY(pos.x, pos.z));
+  let s = supportY(pos.x, pos.z), onSkin = false;
+  const c = P.toArm(pos, _v4), a = C.armAt(c.x);
+  if (C.onArm(c.x) && Math.abs(c.z - a.z) < a.r && P.lift < 0.02) { const sw = P.toWorld(_v3.set(c.x, C.skinY(c.x, c.z), c.z), _v3); if (sw.y > s) { s = sw.y; onSkin = true; } }
   const h = new THREE.Vector3(0, 1, 0).applyQuaternion(o.getWorldQuaternion(new THREE.Quaternion())); h.y = 0;
   if (h.lengthSq() < 1e-6) h.set(1, 0, 0); h.normalize();
   const up = new THREE.Vector3(0, 1, 0), x = new THREE.Vector3().crossVectors(h, up).normalize();
   o.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, h, up));   // z（厚み方向）= 上 → 広い面を下にして横たわる
   o.position.set(pos.x, s + 0.0145, pos.z);
+  if (onSkin) P.parentFor(c.x).attach(o);   // 腕の上に置いたプローブは腕と一緒に動く
   addLog('プローブを置きました（持ち上げるとエコーが再開します）', 'info');
 }
 // 駆血帯を外す: 装着位置から手に移る。両針の留置後ならステップ完了、途中なら警告
@@ -1000,7 +1368,7 @@ function releaseHeld(cs) {
   const tool = cs.held;
   if (!tool) return;
   cs.held = null; tool.held = null; tool.holdPos = tool.holdQuat = null;
-  cs.ctrl.getWorldPosition(_v);
+  grabPoint(cs, _v);
 
   if (tool.kind === 'pouch' && tool.obj.userData.torn) {
     // 開封済みのパウチはゴミ → 下段の膿盆へ
@@ -1013,7 +1381,8 @@ function releaseHeld(cs) {
   if (tool.kind === 'probe') { placeProbe(tool); haptic(cs, 0.3, 40); return; }                      // プローブも離した場所に置く（プローブ立ての近くなら立てに戻す）
   if (tool.name === 'stethoscope') { returnHome(tool); return; }   // どこで離してもカートのトレイへ戻る（イヤーチップも外れる）
   if (tool.name === 'sheet') {
-    const nearArm = Math.abs(_v.z - C.ARM_Z) < 0.25 && _v.x > C.ELBOW_X - 0.15 && _v.x < C.WRIST_X + 0.25 && _v.y < C.ARM_Y + 0.35;
+    const c = P.toArm(_v, _v4);
+    const nearArm = Math.abs(c.z - C.ARM_Z) < 0.25 && c.x > C.ELBOW_X - 0.15 && c.x < C.WRIST_X + 0.25 && c.y < C.ARM_Y + 0.35;
     if (nearArm && !state.sheetPlaced) {
       state.sheetPlaced = true; P.sheetPlane.visible = true; tool.obj.visible = false; tool.fixed = true;
       scene.attach(tool.obj);
@@ -1021,10 +1390,9 @@ function releaseHeld(cs) {
       completeStep('sheet'); haptic(cs, 0.6, 80); return;
     }
   } else if (tool.name === 'tourniquet') {
-    if (_v.distanceTo(P.tourniquet.pos) < 0.2 && !state.tourniquetOn) {
+    if (_v.distanceTo(P.tourniquetWorld(_v4)) < 0.2 && !state.tourniquetOn) {
       state.tourniquetOn = true; state.tourniquetAt = clock.elapsedTime; tool.fixed = true;
-      P.group.add(tool.obj);
-      tool.obj.position.copy(P.tourniquet.pos);
+      P.attachToUpperArm(tool.obj, P.tourniquet.pos);   // 上腕と一緒に動く
       const q = P.tourniquet.quat.clone();
       const localUp = new THREE.Vector3(0, 1, 0).applyQuaternion(q.clone().invert());
       q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-localUp.z, localUp.x)));
@@ -1042,13 +1410,13 @@ function releaseHeld(cs) {
       if (tool.inVessel) {
         if (tool.angle > 18 && !state.done['needle' + tool.site]) { state.score -= 3; addLog('逆血後は針を寝かせて進めてから固定しましょう（自動で寝かせました）−3', 'warn'); }
         layDownNeedle(tool);
-        tool.stuck = true; P.forearm.attach(tool.obj);
+        tool.stuck = true; P.parentFor(P.toArm(tool.obj.getWorldPosition(_v3), _v3).x).attach(tool.obj);
         state.info = '';
         if (!state.done['needle' + tool.site]) addLog(`${tool.site}針 穿刺成功（刺入角 ${tool.angle.toFixed(0)}°）→ ${tool.obj.userData.type === 'cannula' && !tool.styletOut ? '内筒を抜去' : 'テープで固定'}`, 'ok');
         completeStep('needle' + tool.site); haptic(cs, 0.8, 120);
         if (tool.obj.userData.type === 'cannula' && tool.styletOut) completeStep('stylet' + tool.site);   // 持ったまま（グリップボタン）内筒を抜いていた場合
       } else {
-        tool.stuck = true; P.forearm.attach(tool.obj);
+        tool.stuck = true; P.parentFor(P.toArm(tool.obj.getWorldPosition(_v3), _v3).x).attach(tool.obj);
         state.info = '';
         addLog(`${tool.site}針は血管に入っていません。持ち直して調整するか抜針してください`, 'warn');
       }
@@ -1072,8 +1440,8 @@ function layDownNeedle(tool) {
   const n = tool.obj, ud = n.userData, V = P.vessel;
   const tipZ = (ud.type === 'cannula' && tool.styletOut) ? ud.cannulaTipZ : ud.tipZ;
   const L = -tipZ;
-  n.localToWorld(_v.set(0, 0, tipZ));
-  _v2.set(0, 0, -1).applyQuaternion(n.getWorldQuaternion(_q)); _v2.y = 0; _v2.normalize();
+  P.toArm(n.localToWorld(_v.set(0, 0, tipZ)), _v);
+  P.toArmDir(_v2.set(0, 0, -1).applyQuaternion(n.getWorldQuaternion(_q)), _v2); _v2.y = 0; _v2.normalize();
   const cl = V.closest(_v);
   const tan = cl.tangent.clone(); if (tan.dot(_v2) < 0) tan.negate();
   const tip = cl.point.clone().addScaledVector(tan, 0.006);                 // 血管軸上を 6mm 進める
@@ -1081,9 +1449,8 @@ function layDownNeedle(tool) {
   hub.y = C.skinY(hub.x, hub.z) + ud.hubLift;
   const dir = new THREE.Vector3().subVectors(tip, hub).normalize();
   const zAxis = dir.clone().negate(), xAxis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), zAxis).normalize(), yAxis = new THREE.Vector3().crossVectors(zAxis, xAxis);
-  scene.attach(n);
-  n.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
-  n.position.copy(hub);
+  // 基準姿勢で決めた姿勢を腕（前腕 / 上腕）の子として置く（ローカル = 基準姿勢 − 原点。腕がどの向きでも正しい）
+  P.placeCanon(n, hub, new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis)));
   tool.inVessel = true;
 }
 function placeTape(tape) {
@@ -1122,10 +1489,10 @@ function placeTape(tape) {
 function applyTapeOnSkin(tape, n, kind) {
   const ud = n.obj.userData;
   const nq = n.obj.getWorldQuaternion(new THREE.Quaternion());
-  const axis = new THREE.Vector3(0, 0, -1).applyQuaternion(nq); axis.y = 0; axis.normalize();   // 針先方向（水平成分）
+  const axis = P.toArmDir(new THREE.Vector3(0, 0, -1).applyQuaternion(nq), new THREE.Vector3()); axis.y = 0; axis.normalize();   // 針先方向（基準姿勢・水平成分）
   const across = new THREE.Vector3(-axis.z, 0, axis.x);                                          // 幅方向（腕を横切る）
   const zc = kind === 'tube' ? 0.065 : kind === 'hubRear' ? ud.tapeZ + 0.014 : ud.tapeZ;
-  const c = n.obj.localToWorld(new THREE.Vector3(0, 0, zc));
+  const c = P.toArm(n.obj.localToWorld(new THREE.Vector3(0, 0, zc)));
   let topY, halfW, wingHalf = 0, wingY = 0;
   if (kind === 'tube') { topY = c.y - 0.0015; halfW = 0.0045; }
   else {
@@ -1147,9 +1514,9 @@ function applyTapeOnSkin(tape, n, kind) {
     p.setXYZ(i, pt.x, y, pt.z);
   }
   geo.computeVertexNormals();
-  // 貼ったテープは針に追従させる（ワールド座標で作った形状を、針の子として保持）
-  tape.obj.position.set(0, 0, 0); tape.obj.quaternion.identity(); tape.obj.scale.setScalar(1);
-  scene.add(tape.obj); n.obj.attach(tape.obj);
+  // 貼ったテープは針に追従させる（基準姿勢で作った形状を前腕の座標系（= 基準姿勢 − 肘）に置いてから、針の子として保持）
+  tape.obj.quaternion.identity();
+  P.placeCanon(tape.obj, new THREE.Vector3(0, 0, 0), null, c.x); n.obj.attach(tape.obj);
   setTapeApplied(tape.obj, geo);
 }
 function connectLine(conn) {
@@ -1233,7 +1600,7 @@ function resetAll() {
   P.sheetPlane.visible = false; P.hematoma.visible = false; P.swelling.visible = false; P.clearDisinfect();
   P.vessel.pickSites();   // 穿刺部位は毎回変える
   buildSteps();
-  P.setLift(0);
+  P.setPose({ abduct: 0, yaw: 0, lift: 0, roll: 0 });   // 腕の姿勢も基準に戻す
   echo.setActive(false); echo.clearNeedles();
   if (config.vessel === 'avf') P.vessel.setRadius(C.VESSEL_R_NORMAL);
   room.lines.reset(); room.setPumpRunning(false); room.resetMachineFill();
@@ -1253,13 +1620,11 @@ function demoState() {
   state.disinfected = true;
   for (const site of ['V', 'A']) {
     const n = tools['needle' + site], s = P.vessel.sites[site], ud = n.obj.userData;
-    P.group.add(n.obj);
     // 針先は血管の走行に沿わせる（A は末梢向き、V は中枢向き）
     const dir = s.tangent.clone(); dir.y = 0; dir.normalize(); if ((site === 'A') === (dir.x < 0)) dir.negate();
-    n.obj.position.set(s.x - dir.x * 0.012, C.skinY(s.x, s.z) + 0.004, s.z - dir.z * 0.012);
-    n.obj.quaternion.setFromEuler(new THREE.Euler(-0.35, Math.atan2(-dir.x, -dir.z), 0, 'YXZ'));
+    P.placeCanon(n.obj, new THREE.Vector3(s.x - dir.x * 0.012, C.skinY(s.x, s.z) + 0.004, s.z - dir.z * 0.012), new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.35, Math.atan2(-dir.x, -dir.z), 0, 'YXZ')));
     n.punctured = true; n.inVessel = true; n.angle = 20;
-    layDownNeedle(n); n.stuck = true; P.forearm.attach(n.obj);
+    layDownNeedle(n); n.stuck = true;
     if (ud.stylet) { n.styletOut = true; ud.stylet.visible = false; }
     state.done['needle' + site] = true; state.done['stylet' + site] = true;
     for (const ti of site === 'A' ? [0, 2] : [1, 3]) { const tp = tools['tape' + ti]; n.obj.getWorldPosition(tp.obj.position); placeTape(tp); }
@@ -1283,6 +1648,7 @@ function selfTestGrab() {
     const h = loadHand(side, gloveMat); const pose = gripPose(side);
     h.group.quaternion.copy(pose.quaternion); h.group.position.copy(pose.position);
     const holder = new THREE.Group(); holder.add(h.group); f.grip.add(holder); f.holder = holder; f.hand = h;
+    f.hands = { ...controllers[0].hands, [side]: { ...controllers[0].hands[side], api: h, holder } };   // 針の持ち位置はこの手で決める
     f.ctrl.position.copy(pos); f.grip.position.copy(pos);
     scene.add(f.ctrl); scene.add(f.grip);
     return f;
@@ -1343,13 +1709,13 @@ function selfTestGrab() {
       const st = tools.stethoscope, s = P.vessel.sites.V, a = C.armAt(s.x);
       moveTo(fake, new THREE.Vector3(s.x, s.y + 0.1, s.z));
       grab(fake, st);
-      const hold = st.gripPos.clone().applyQuaternion(fake.ctrl.quaternion);
+      const hold = (st.holdPos || st.gripPos).clone().applyQuaternion(fake.ctrl.quaternion);
       moveTo(fake, new THREE.Vector3(s.x, s.y - 0.02, s.z).sub(hold));
       updateHeld(fake, st, 0.016);
       st.obj.updateMatrixWorld(true);
       const F = st.obj.localToWorld(STETH_FACE.clone());
       const sink = a.r - Math.hypot(F.y - a.y, F.z - a.z);
-      log('聴診器 皮膚で止まる', sink <= 0.0015 && sink >= -0.001, `: 沈み込み=${(sink * 1000).toFixed(1)}mm`);
+      log('聴診器 皮膚で止まる', sink <= 0.0025 && sink >= -0.001, `: 沈み込み=${(sink * 1000).toFixed(1)}mm`);   // 腕の側面の部位では面の向きの分で 2mm 程度まで許容
       fake.held = null; st.held = null; returnHome(st);
     }
     // テープ: 2 枚貼り済みの針が 6cm 隣にあっても、翼の上で離したテープはその針に貼れるか
@@ -1409,18 +1775,16 @@ function selfTestGrab() {
       P.vessel.setRadius(C.VESSEL_R_DILATED);
       for (const site of ['V', 'A']) {
         const n = tools['needle' + site], s = P.vessel.sites[site];
-        P.group.add(n.obj);
         const dir = s.tangent.clone(); dir.y = 0; dir.normalize(); if ((site === 'A') === (dir.x < 0)) dir.negate();
         // 針先は部位から 2〜3cm 先へ進むので、狭窄（部位から 2.5〜3.5cm）のない側へ向ける
         { const ahead = P.vessel.closest(new THREE.Vector3(s.x + dir.x * 0.025, s.y - 0.004, s.z + dir.z * 0.025)); if (ahead.sten > 0.2) dir.negate(); }
-        n.obj.position.set(s.x - dir.x * 0.012, C.skinY(s.x, s.z) + 0.004, s.z - dir.z * 0.012);
-        n.obj.quaternion.setFromEuler(new THREE.Euler(-0.35, Math.atan2(-dir.x, -dir.z), 0, 'YXZ'));
-        n.punctured = true; n.inVessel = true; layDownNeedle(n); n.stuck = true; P.forearm.attach(n.obj);
+        P.placeCanon(n.obj, new THREE.Vector3(s.x - dir.x * 0.012, C.skinY(s.x, s.z) + 0.004, s.z - dir.z * 0.012), new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.35, Math.atan2(-dir.x, -dir.z), 0, 'YXZ')));
+        n.punctured = true; n.inVessel = true; layDownNeedle(n); n.stuck = true;
       }
       P.vessel.setRadius(C.VESSEL_R_NORMAL);
       for (const site of ['V', 'A']) {
         const n = tools['needle' + site], ud = n.obj.userData;
-        n.obj.updateMatrixWorld(true); n.obj.localToWorld(_v3.set(0, 0, ud.tipZ));
+        n.obj.updateMatrixWorld(true); P.toArm(n.obj.localToWorld(_v3.set(0, 0, ud.tipZ)), _v3);
         const cl = P.vessel.closest(_v3);
         log(`駆血解除後も ${site}針の先端は血管内`, cl.d < cl.r && cl.kind === 'vein', `: 軸からの距離=${(cl.d * 1000).toFixed(1)}mm 半径=${(cl.r * 1000).toFixed(1)}mm`);
         n.stuck = false; resetNeedleState(n); returnHome(n);
@@ -1501,7 +1865,7 @@ function selfTestGrab() {
       const fakeHand = new THREE.Group(); fakeHand.joints = {};
       for (const name of XR_JOINTS) { const b = h.joint[name]; if (!b) continue; const j = new THREE.Group(); b.getWorldPosition(j.position); b.getWorldQuaternion(j.quaternion); j.visible = true; fakeHand.joints[name] = j; }
       const prevHand = cs0.hand, prevTracked = cs0.tracked, prevSide = cs0.side; cs0.hand = tr; cs0.tracked = true; cs0.side = side;
-      tr.group.position.set(0, 0, 0); tr.update(fakeHand); tr.group.updateMatrixWorld(true); updateVirtualGrip(cs0);
+      tr.group.position.set(0, 0, 0); tr.update(fakeHand); tr.group.updateMatrixWorld(true); cs0.vgFilter?.p.reset(); cs0.vgFilter?.q.reset(); updateVirtualGrip(cs0);
       const o = cs0.vgrip.getWorldPosition(new THREE.Vector3()), og = fk.grip.getWorldPosition(new THREE.Vector3());
       const q = cs0.vgrip.getWorldQuaternion(new THREE.Quaternion()), qg = fk.grip.getWorldQuaternion(new THREE.Quaternion());
       const ang = THREE.MathUtils.radToDeg(2 * Math.acos(Math.min(1, Math.abs(q.dot(qg)))));
@@ -1519,7 +1883,7 @@ function selfTestGrab() {
       for (const name of Object.keys(tr.joints)) put(name, 0, 1, 0);
       put('wrist', 0, 1, 0); put('middle-finger-phalanx-proximal', 0, 1, -0.1); put('index-finger-phalanx-proximal', -0.03, 1, -0.09); put('pinky-finger-phalanx-proximal', 0.03, 1, -0.09);
       const prevHand = cs0.hand, prevTracked = cs0.tracked; cs0.hand = tr; cs0.tracked = true;
-      tr.update(fakeHand); tr.group.updateMatrixWorld(true); updateVirtualGrip(cs0);
+      tr.update(fakeHand); tr.group.updateMatrixWorld(true); cs0.vgFilter?.p.reset(); cs0.vgFilter?.q.reset(); updateVirtualGrip(cs0);
       const q = cs0.vgrip.getWorldQuaternion(new THREE.Quaternion());
       const ax = v => v.applyQuaternion(q);
       const X = ax(new THREE.Vector3(1, 0, 0)), Y = ax(new THREE.Vector3(0, 1, 0)), Z = ax(new THREE.Vector3(0, 0, 1)), o = cs0.vgrip.getWorldPosition(new THREE.Vector3());
@@ -1538,6 +1902,195 @@ function selfTestGrab() {
       const got = tr.tips.index?.getWorldPosition(new THREE.Vector3());
       const ok = tr.loaded && !!want && !!got && got.distanceTo(tr.group.localToWorld(want.clone())) < 1e-6;
       log('ハンドトラッキング用モデル: 関節に追従', ok, `: loaded=${tr.loaded} joints=${Object.keys(tr.joints).length}`);
+    }
+    // 針の 2 つの持ち方: トリガー = 標準（中指〜小指を握る）、グリップ = 浅い血管用（OK サイン: 中指〜小指を伸ばし、つまみ位置は掌側＝下）
+    {
+      const n = tools.needleV, h = fake.hand;
+      fake.grip.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0)));   // 回内位（甲が上）
+      fake.ctrl.quaternion.copy(fake.grip.quaternion); moveTo(fake, new THREE.Vector3(0.6, 1.3, 0.3));
+      const pinchY = (cs) => { fake.toolRoot.updateMatrixWorld(true); const p = n.obj.localToWorld(new THREE.Vector3(...n.obj.userData.pinch)); return p.y - fake.grip.position.y; };
+      grab(fake, n); const modeA = n.holdMode, yA = pinchY(), tipsA = h.tips.middle.getWorldPosition(new THREE.Vector3()).distanceTo(h.joint.wrist.getWorldPosition(new THREE.Vector3()));
+      fake.held = null; n.held = null; returnHome(n);
+      fake.grabByGrip = true; grab(fake, n); fake.grabByGrip = false; const modeB = n.holdMode, yB = pinchY(), tipsB = h.tips.middle.getWorldPosition(new THREE.Vector3()).distanceTo(h.joint.wrist.getWorldPosition(new THREE.Vector3()));
+      const midB = h.tips.middle.getWorldPosition(new THREE.Vector3()).y - fake.grip.position.y;   // 伸ばした中指の先の高さ（回内位なので上が +y）
+      const gap = h.tips.thumb.getWorldPosition(new THREE.Vector3()).distanceTo(h.tips.index.getWorldPosition(new THREE.Vector3()));
+      fake.held = null; n.held = null; returnHome(n); fake.grip.quaternion.identity(); fake.ctrl.quaternion.identity();
+      log('グリップで持つと浅い血管用の持ち方（つまみ位置が伸ばした指より下、中指〜小指が伸びる）', modeA === 'pinch' && modeB === 'ok' && yB < midB - 0.02 && tipsB > tipsA + 0.05 && gap < 0.012 && Math.abs(yA - yB) < 0.002, `: 標準 ${modeA} つまみ高さ ${(yA * 1000).toFixed(0)}mm 中指先まで ${(tipsA * 1000).toFixed(0)}mm / グリップ ${modeB} つまみ ${(yB * 1000).toFixed(0)}mm 中指先の高さ ${(midB * 1000).toFixed(0)}mm 中指先まで ${(tipsB * 1000).toFixed(0)}mm 指先の隙間 ${(gap * 1000).toFixed(1)}mm`);
+    }
+    // 触知: 人差し指を立てた手の指先を血管の真上の皮膚に置くと拍動、1.5cm 横では伝わらない、指を立てていなければ伝わらない
+    {
+      const sv = P.vessel.sites.V, dir = sv.tangent.clone(); dir.y = 0; dir.normalize(); const side = new THREE.Vector3(-dir.z, 0, dir.x);
+      fake.hand.setCurl({ ...POINT_CURL, thumbOpp: 0 }); fake.grip.quaternion.identity(); fake.ctrl.quaternion.identity(); fake.grip.updateMatrixWorld(true);
+      const tip = palpPoint(fake, new THREE.Vector3()), ctrlP = fake.ctrl.getWorldPosition(new THREE.Vector3());   // 基準点 = 人差し指の先
+      const put = c => moveTo(fake, P.toWorld(c).add(ctrlP).sub(tip));
+      const savedDone = state.done.palpate; state.done.palpate = true;   // 手順の完了判定は動かさず、拍動の判定だけ見る
+      fake.pointing = true; put(new THREE.Vector3(sv.x, sv.y + 0.012, sv.z)); const onTop = updatePalpation(fake, 0.016, 1);   // 第 1 関節が皮膚の 1.2cm 上（指の腹が皮膚に触れる高さ）
+      // 血管の縁の少し外（半径 + 2mm 横）: 拍動は伝わらない（ここに刺すと血管に入らない）
+      const svb = P.vessel.closestBelow(new THREE.Vector3(sv.x, sv.y + 0.012, sv.z)), edgeOff = svb.r + 0.002;
+      let edge = false;
+      for (const sg of [1, -1]) {   // 縁の外側で、真下に別の血管が来ない側を使う（別の血管があればそれは正しく拍動する）
+        const c = new THREE.Vector3(sv.x + side.x * edgeOff * sg, 0, sv.z + side.z * edgeOff * sg); c.y = C.skinY(c.x, c.z) + 0.012;
+        const cb = P.vessel.closestBelow(c); if (cb && cb.branch !== svb.branch) continue;
+        put(c); edge = updatePalpation(fake, 0.016, 4); break;
+      }
+      // 横にずらした所: 真下に別の静脈がない位置（1.5〜3cm、両側から探す）
+      let bp = null;
+      for (const off of [0.015, 0.02, 0.025, 0.03]) for (const sg of [1, -1]) { const c = new THREE.Vector3(sv.x + side.x * off * sg, 0, sv.z + side.z * off * sg); c.y = C.skinY(c.x, c.z) + 0.012; const cb = P.vessel.closestBelow(c); if (!bp && (!cb || cb.horiz > cb.r + 0.01)) bp = c; }
+      put(bp || new THREE.Vector3(sv.x + side.x * 0.03, C.skinY(sv.x + side.x * 0.03, sv.z + side.z * 0.03) + 0.012, sv.z + side.z * 0.03)); const beside = updatePalpation(fake, 0.016, 2);
+      fake.pointing = false; put(new THREE.Vector3(sv.x, sv.y + 0.012, sv.z)); const notPointing = updatePalpation(fake, 0.016, 3);
+      // 学習モード（手順「スリルを触知」の最中）: 開いた手でも、1cm 横でも伝わる
+      state.done.palpate = false; put(new THREE.Vector3(sv.x + side.x * 0.01, C.skinY(sv.x + side.x * 0.01, sv.z + side.z * 0.01) + 0.012, sv.z + side.z * 0.01)); const learn = updatePalpation(fake, 0.016, 5);
+      state.palpateTime = 0; state.done.palpate = savedDone; state.info = '';
+      log('触知: 穿刺時は立てた人差し指の先が内腔の真上にあるときだけ拍動（縁の外・横 1.5cm・指を立てない手では伝わらない）、学習中は開いた手で触れるだけで伝わる', onTop && !edge && !beside && !notPointing && learn, `: 真上=${onTop} 縁の外(${(edgeOff * 1000).toFixed(1)}mm)=${edge} 横=${beside} 指を立てない=${notPointing} 学習中(開いた手・1cm横)=${learn}`);
+    }
+    // タイトルへ戻るボタン: 透析室の物が隠れてタイトルが出る → スタートで透析室に戻る
+    {
+      returnToTitle();
+      const inTitle = titleMode && title.group.visible && P.group.visible === false;
+      startGame();
+      log('赤いボタンでタイトル画面へ戻り、スタートで透析室に戻る', inTitle && !titleMode && P.group.visible && !title.group.visible, `: title=${inTitle} back=${!titleMode && P.group.visible}`);
+    }
+    // タイトル画面のキー: 上段の「針」キーを指で押し込んでも、下段のスタートは押されない（矩形判定）。押すと針の種類が切り替わる
+    {
+      const prevTitle = titleMode; titleMode = true; title.group.visible = true;
+      const needleBtn = title.buttons.find(b => b.name === 'title_needle'), startBtn = title.buttons.find(b => b.name === 'title_start');
+      const cap = needleBtn.cap; cap.parent.updateMatrixWorld(true);
+      const top = cap.parent.localToWorld(needleBtn.rest.clone().add(needleBtn.topOffset));
+      const axisW = new THREE.Vector3(0, 1, 0).applyQuaternion(cap.parent.getWorldQuaternion(new THREE.Quaternion()));
+      fake.hand.setCurl({ ...POINT_CURL, thumbOpp: 0 }); fake.grip.updateMatrixWorld(true);
+      const tip = fake.hand.tips.index.getWorldPosition(new THREE.Vector3()), ctrlP = fake.ctrl.getWorldPosition(new THREE.Vector3());
+      const before = config.needle;
+      fake.pointing = true; controllers.push(fake);
+      for (let i = 0; i < 12; i++) { moveTo(fake, top.clone().addScaledVector(axisW, 0.02 - 0.004 * i).add(ctrlP).sub(tip)); updateButtons(0.016); }   // 指先を 2cm 上から 2.8cm 押し込む
+      controllers.splice(controllers.indexOf(fake), 1); fake.pointing = false;
+      const toggled = config.needle !== before, startDepth = startBtn.depth, stillTitle = titleMode;
+      titleMode = prevTitle; title.group.visible = prevTitle;
+      log('タイトルのキー: 針キーを押してもスタートは押されない', toggled && startDepth < 0.001 && stillTitle, `: 針 ${before}→${config.needle} スタートの沈み ${(startDepth * 1000).toFixed(1)}mm title=${stillTitle}`);
+      if (toggled) toggleTitleSetting('needle');   // 設定を元に戻す
+      for (const b of title.buttons) { b.depth = 0; b.latched = false; b.cap.position.copy(b.rest); }
+    }
+    // エコーのフリーズ: プローブを持つ手のグリップで静止 ⇄ 解除。フリーズ中は画像を更新しない。離すと解除される
+    {
+      const pr = tools.probe; moveTo(fake, pr.obj.localToWorld(pr.grabOffset.clone())); grab(fake, pr);
+      updateEcho(0.016, 0, 60 / C.HEART_BPM);
+      toggleEchoFreeze(fake); const f1 = echo.state.frozen;            // A/X（X/Y）ボタン相当
+      const stillHeld = fake.held === pr;
+      toggleEchoFreeze(fake); const f2 = echo.state.frozen;
+      toggleEchoFreeze(fake);
+      fake.squeezePressed = true; onSqueezeStart(fake); fake.squeezePressed = false; onSelectEnd(fake);   // グリップでも離せる（トリガーと同じ）
+      log('プローブを持つ手の A/B（X/Y）でエコーをフリーズ／解除、グリップで離すと解除', f1 === true && stillHeld && f2 === false && echo.state.frozen === false && pr.held === null, `: 1回目=${f1} 持ったまま=${stillHeld} 2回目=${f2} グリップで離した後=${echo.state.frozen} held=${pr.held?.name ?? '(none)'}`);
+      returnHome(pr);
+    }
+    // 金属針のクランプ: 人差し指の先をクランプに近づけてトリガー → 開く（手の中心が離れていても指先が近ければよい）。輪も出る
+    {
+      const s = P.vessel.sites.V;
+      const t = registerTool('testClamp', makeNeedle(0xd9303a, 'metal'), { pos: [s.x, s.y + 0.004, s.z], rotY: 0, gripPos: [0, 0, 0], kind: 'needle', site: 'A' });
+      t.stuck = true; t.inVessel = true;
+      const cl = t.obj.localToWorld(CLAMP_LOCAL.clone());
+      fake.hand.setCurl({ ...POINT_CURL, thumbOpp: 0 }); fake.grip.updateMatrixWorld(true);
+      const tip = fake.hand.tips.index.getWorldPosition(new THREE.Vector3()), ctrlP = fake.ctrl.getWorldPosition(new THREE.Vector3());
+      moveTo(fake, cl.clone().add(ctrlP).sub(tip).add(new THREE.Vector3(0, 0.02, 0)));   // 指先がクランプの 2cm 上
+      updateHover(fake); const ringOk = fake.hoverRing.visible && fake.hoverRing.position.distanceTo(cl) < 1e-6;
+      fake.selectPressed = true; onSelectStart(fake); fake.selectPressed = false; onSelectEnd(fake);
+      log('金属針のクランプは人差し指の先で開け閉め（水色の輪が出る）', ringOk && t.obj.userData.clampOpen && fake.held === null, `: ring=${ringOk} open=${t.obj.userData.clampOpen} held=${fake.held?.name ?? '(none)'}`);
+      removeTool('testClamp');
+    }
+    // 掴める物の目印（水色の輪）: 何も持っていない手がテープの近くにあると、テープの掴み位置に輪が出る。離れると消える
+    {
+      const tp = tools.tape3, gp = tp.obj.localToWorld(tp.grabOffset.clone());
+      moveTo(fake, gp.clone().add(new THREE.Vector3(-0.02, 0.03, 0))); updateHover(fake);   // 列の端のテープの外側（隣のテープより近い所）
+      const near = fake.hoverRing.visible && fake.hoverRing.position.distanceTo(gp) < 1e-6;
+      moveTo(fake, new THREE.Vector3(0.6, 1.6, 0.6)); updateHover(fake);
+      log('掴める物に水色の輪が出る（離れると消える）', near && !fake.hoverRing.visible, `: near=${near} far=${fake.hoverRing.visible}`);
+    }
+    // ハンドトラッキングの平滑化（One Euro）: 静止した手のジッター（±2mm）は 1/4 以下に、1 秒で 30cm 動かしたときの遅れは 2cm 以内
+    {
+      const f = new EuroVec(1.2, 40); let r = 0;
+      const rnd = () => { r = (r * 1664525 + 1013904223) >>> 0; return r / 4294967296 - 0.5; };
+      const base = new THREE.Vector3(0.3, 1.2, -0.4), v = new THREE.Vector3(); let rawVar = 0, filVar = 0;
+      for (let i = 0; i < 144; i++) { v.copy(base).add(new THREE.Vector3(rnd() * 0.004, rnd() * 0.004, rnd() * 0.004)); const o = f.filter(v, 1 / 72); if (i > 20) { rawVar += v.distanceToSquared(base); filVar += o.distanceToSquared(base); } }
+      const f2 = new EuroVec(1.2, 40); let lag = 0;
+      for (let i = 0; i <= 72; i++) { v.set(0.3 + 0.3 * i / 72, 1.2, -0.4); const o = f2.filter(v, 1 / 72); if (i === 72) lag = v.distanceTo(o); }
+      log('ハンドトラッキングの手ぶれ平滑化（静止時のジッターを抑え、動かすと遅れない）', filVar < rawVar / 9 && lag < 0.02, `: ジッター ${(Math.sqrt(rawVar / 123) * 1000).toFixed(2)}mm → ${(Math.sqrt(filVar / 123) * 1000).toFixed(2)}mm, 30cm/s での遅れ ${(lag * 1000).toFixed(1)}mm`);
+    }
+    // 患者の腕の姿勢: 手首を持って上げる・外へ振る → 離すと持ち上げだけ戻り、振った向きは保たれる。肘を持って外へ → 腕全体が肩から広がる
+    {
+      controllers.push(fake);   // updateArmPose は controllers の中から持っている手を探す
+      const w0 = P.wristNow(new THREE.Vector3());
+      moveTo(fake, w0.clone().add(new THREE.Vector3(0, 0.03, 0.02)));
+      fake.selectPressed = true; onSelectStart(fake);
+      const held = fake.wrist === 'wrist';
+      moveTo(fake, w0.clone().add(new THREE.Vector3(0, 0.15, 0.1)));
+      for (let i = 0; i < 40; i++) updateArmPose(0.05);
+      const lifted = P.pose.lift > 0.15, swung = P.pose.yaw > 0.1;
+      fake.selectPressed = false; onSelectEnd(fake);
+      for (let i = 0; i < 80; i++) updateArmPose(0.05);
+      const settled = P.pose.lift < 0.01 && P.pose.yaw > 0.1;
+      log('手首を持つと前腕が上がり外へ振れる → 離すと下りるが向きは保たれる', held && lifted && swung && settled, `: held=${held} lift=${P.pose.lift.toFixed(2)} yaw=${P.pose.yaw.toFixed(2)}`);
+      const e0 = P.elbowNow(new THREE.Vector3());
+      moveTo(fake, e0.clone().add(new THREE.Vector3(0, 0.03, 0.03)));
+      fake.selectPressed = true; onSelectStart(fake);
+      const heldE = fake.wrist === 'elbow';
+      moveTo(fake, e0.clone().add(new THREE.Vector3(-0.05, 0.03, 0.25)));
+      for (let i = 0; i < 40; i++) updateArmPose(0.05);
+      fake.selectPressed = false; onSelectEnd(fake);
+      log('肘を持って外へ動かすと腕全体が肩から広がる', heldE && P.pose.abduct > 0.25, `: held=${heldE} abduct=${P.pose.abduct.toFixed(2)}`);
+      controllers.splice(controllers.indexOf(fake), 1);
+      P.setPose({ abduct: 0, yaw: 0, lift: 0, roll: 0 });
+    }
+    // 腕の姿勢を変えた状態（肩から 29° 外・肘で 10° 外・34° 回内）でも、判定・エコー・接触・駆血帯は腕に追従する
+    {
+      P.setPose({ abduct: 0.5, yaw: 0.17, lift: 0, roll: 0.6 });
+      const s = P.vessel.sites.V;
+      const c0 = new THREE.Vector3(s.x, s.y, s.z), w0 = P.toWorld(c0), back = P.toArm(w0);
+      const cu = new THREE.Vector3(C.ELBOW_X - 0.1, C.ARM_Y, C.ARM_Z), wu = P.toWorld(cu), bu = P.toArm(wu);
+      log('腕の姿勢変更: 座標変換の往復（前腕・上腕）', back.distanceTo(c0) < 2e-5 && bu.distanceTo(cu) < 2e-5 && w0.distanceTo(c0) > 0.1, `: 前腕 ${(back.distanceTo(c0) * 1000).toFixed(3)}mm 上腕 ${(bu.distanceTo(cu) * 1000).toFixed(3)}mm 穿刺部位の移動量 ${(w0.distanceTo(c0) * 100).toFixed(0)}cm`);
+      // 針: 部位の血管中心へ血管に沿って 20° で入れた針先 → 血管内と判定（腕の向きに関係なく）
+      const n = tools.needleV, ud = n.obj.userData, aa = C.armAt(s.x), up = new THREE.Vector3(0, s.y - aa.y, s.z - aa.z).normalize();
+      const dir = s.tangent.clone(); dir.y = 0; dir.normalize();
+      { const ahead = P.vessel.closest(new THREE.Vector3(s.x + dir.x * 0.012, s.y - s.depth, s.z + dir.z * 0.012)); if (ahead.sten > 0.2 || ahead.d > 0.002) dir.negate(); }
+      const tipC = new THREE.Vector3(s.x, s.y - s.depth, s.z), d3 = dir.clone().multiplyScalar(Math.cos(0.35)).addScaledVector(up, -Math.sin(0.35)).normalize();
+      const zA = d3.clone().negate(), xA = new THREE.Vector3().crossVectors(up, zA).normalize(), yA = new THREE.Vector3().crossVectors(zA, xA);
+      { // 針先をワールドで血管中心に合わせる（針は剛体なので、肘周りの変形がある所では先端基準で置く）
+        const qW = P.frameQuat(tipC.x, new THREE.Quaternion()).multiply(new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xA, yA, zA)));
+        const dW = new THREE.Vector3(0, 0, -1).applyQuaternion(qW), tipW = P.toWorld(tipC);
+        scene.add(n.obj); n.obj.quaternion.copy(qW); n.obj.position.copy(tipW).addScaledVector(dW, ud.tipZ); n.obj.updateMatrixWorld(true);
+      }
+      resetNeedleState(n); n.held = fake; fake.held = n; const dis = state.disinfected; state.disinfected = true;
+      updateHeld(fake, n, 0.016);
+      log('腕を回した状態でも針先の血管内判定が合う', n.punctured && n.inVessel && !n.perforated, `: punctured=${n.punctured} inVessel=${n.inVessel} info="${state.info}"`);
+      n.held = null; fake.held = null; resetNeedleState(n); returnHome(n); state.disinfected = dis; state.info = '';
+      // エコー: 部位に短軸で当てたプローブ（腕の向きに合わせて置く）→ 画面中央に血管、深さは血管中心まで
+      const pr = tools.probe; grab(fake, pr);
+      // プローブは血管の中心を通る皮膚の法線上に立てる（部位が腕の側面にあるときは、真上の皮膚点から放射方向に当てても血管は中央に来ない）
+      const vc = new THREE.Vector3(s.x, s.y - s.depth, s.z), upR = new THREE.Vector3(0, vc.y - aa.y, vc.z - aa.z), rad = upR.length(); upR.normalize();
+      const skinR = new THREE.Vector3(s.x, aa.y, aa.z).addScaledVector(upR, aa.r), depthR = aa.r - rad;
+      const tan = s.tangent.clone().normalize(), lat = new THREE.Vector3().crossVectors(upR, tan).normalize();
+      P.placeCanon(pr.obj, skinR.clone().addScaledVector(upR, -0.0015), new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(lat, upR, new THREE.Vector3().crossVectors(lat, upR).normalize())));
+      for (let i = 0; i < 3; i++) updateEchoInner(pr, 0.016, i * 0.016, 60 / C.HEART_BPM);
+      const es = echo.state;
+      log('腕を回しても エコーは穿刺部位の血管を画面中央に映す', !!(es.contact && es.centerVein && es.centerVein.latAbs < 0.004 && Math.abs(es.depthMm - depthR * 1000) < 2.5), `: contact=${es.contact} lat=${es.centerVein ? (es.centerVein.latAbs * 1000).toFixed(1) : '-'}mm depth=${es.depthMm.toFixed(1)}mm（血管中心 ${(depthR * 1000).toFixed(1)}mm）`);
+      fake.held = null; pr.held = null; pr.holdPos = pr.holdQuat = null; returnHome(pr);
+      // 手の接触: 回内した腕の穿刺部位の皮膚の 2cm 下に掌の中心を置いても、手は皮膚の外へ押し戻される
+      fake.hand.setCurl({ thumb: 0.3, index: 0.2, middle: 0.2, ring: 0.2, pinky: 0.2, thumbOpp: 0 });
+      fake.grip.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0)));
+      fake.ctrl.quaternion.copy(fake.grip.quaternion);
+      const skinW = P.toWorld(new THREE.Vector3(s.x, C.skinY(s.x, s.z), s.z));
+      moveTo(fake, skinW); resetHandPush(fake); fake.grip.updateMatrixWorld(true);
+      const before = handPenetration(fake, new THREE.Vector3()); updateHandContact(fake, 0.016); const after = handPenetration(fake, new THREE.Vector3());
+      log('腕を回した状態でも手は皮膚で止まる', before > 0.008 && after < 0.001, `: 侵入 ${(before * 1000).toFixed(0)}mm → ${(after * 1000).toFixed(1)}mm`);
+      fake.grip.quaternion.identity(); fake.ctrl.quaternion.identity(); resetHandPush(fake);
+      // 駆血帯: 外へ広げた上腕の上で離す → 巻かれて腕と一緒に動く → 近づけてトリガーで外せる
+      const tq = tools.tourniquet; grab(fake, tq);
+      moveTo(fake, P.tourniquetWorld(new THREE.Vector3()).add(new THREE.Vector3(0, 0.06, 0)));
+      fake.selectPressed = false; onSelectEnd(fake);
+      const on = state.tourniquetOn && tq.obj.parent === P.armRoot;
+      moveTo(fake, P.tourniquetWorld(new THREE.Vector3()).add(new THREE.Vector3(0, 0.05, 0.05)));
+      fake.selectPressed = true; onSelectStart(fake);
+      const off = !state.tourniquetOn && fake.held === tq;
+      moveTo(fake, new THREE.Vector3(0.9, 1.3, 0.6)); fake.selectPressed = false; onSelectEnd(fake);
+      log('外へ広げた腕にも駆血帯を巻ける・外せる', on && off, `: on=${on} off=${off}`);
+      P.setPose({ abduct: 0, yaw: 0, lift: 0, roll: 0 });
     }
     const ng = results.filter(r => !r.ok);
     console.log(`[grabtest] ${results.length - ng.length}/${results.length} OK` + (ng.length ? '  NG: ' + ng.map(r => r.label).join(', ') : ''));
@@ -1562,8 +2115,8 @@ function debugEcho(qs) {
   else if (at === 'gva') s = siteFrom(P.vessel.branches.find(b => b.id === 'graft'), 1.0);   // AVG 静脈側吻合部
   else if (at === 'sten' && s.branch.sten) s = siteFrom(s.branch, s.branch.sten.t);
   else if (dx) s = siteFrom(s.branch, THREE.MathUtils.clamp(s.t + dx / s.branch.len, 0, 1));
-  const fake = { ctrl: new THREE.Group(), grip: new THREE.Group(), side: 'right', hand: { loaded: false }, held: null, hands: controllers[0].hands };
-  scene.add(fake.ctrl);
+  const fake = { ctrl: new THREE.Group(), grip: new THREE.Group(), toolRoot: new THREE.Group(), push: new THREE.Vector3(), side: 'right', hand: { loaded: false }, held: null, hands: controllers[0].hands };
+  fake.ctrl.add(fake.toolRoot); scene.add(fake.ctrl);
   grab(fake, probe);
   const tan = s.tangent.clone().normalize();
   const long = qs.get('axis') === 'long';
@@ -1575,13 +2128,12 @@ function debugEcho(qs) {
   const pos = new THREE.Vector3(s.x, s.y, s.z).addScaledVector(up, -press).addScaledVector(lat, off);
   const zAxis = new THREE.Vector3().crossVectors(lat, up).normalize();
   const m = new THREE.Matrix4().makeBasis(lat, up, zAxis);
-  probe.obj.removeFromParent(); scene.add(probe.obj);
-  probe.obj.position.copy(pos); probe.obj.quaternion.setFromRotationMatrix(m);
+  P.placeCanon(probe.obj, pos, new THREE.Quaternion().setFromRotationMatrix(m));   // 腕の子（ローカル = 基準姿勢 − 原点）: 腕の姿勢を変えても同じ所に当たる
   probe.obj.rotateZ(tilt);
   probe.held = fake; fake.held = probe;
+  if (qs.get('freeze') === '1') setTimeout(() => echo.toggleFreeze(), 1500);   // フリーズ画面の確認用
   if (qs.get('needle') === '1' || qs.get('ndl') === '1') {   // ndl=1: needle=cannula と併用するとき
     const n = tools.needleV, ud = n.obj.userData;
-    scene.add(n.obj);
     const dir = tan.clone().addScaledVector(up, -tan.dot(up)).normalize().negate();
     const ang = Number(qs.get('nang') || 25) * Math.PI / 180, adv = Number(qs.get('nadv') || 0.012);
     const entry = new THREE.Vector3(s.x, s.y, s.z).addScaledVector(dir, -0.03);
@@ -1589,7 +2141,7 @@ function debugEcho(qs) {
     const tip = entry.clone().addScaledVector(d3, adv);
     const hub = tip.clone().addScaledVector(d3, ud.tipZ);
     const zA = d3.clone().negate(), xA = new THREE.Vector3().crossVectors(up, zA).normalize(), yA = new THREE.Vector3().crossVectors(zA, xA);
-    n.obj.position.copy(hub); n.obj.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xA, yA, zA));
+    P.placeCanon(n.obj, hub, new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xA, yA, zA)));
     n.stuck = true; n.punctured = true;
     if (qs.get('stylet') === 'out' && ud.stylet) { n.styletOut = true; ud.stylet.visible = false; }   // 留置針の外筒だけが残った状態
   }
@@ -1613,13 +2165,27 @@ function initAudio() {
   src.start();
   audio = { ctx, pulse, master };
 }
+// 効果音（合成）: tick = 触れた/持った（強さで音の高さと長さ）, ok = 手順完了, bad = 減点, button = ボタン押下。音量は控えめ
+function cue(kind, intensity = 0.5, ms = 60) {
+  if (!audio || audio.ctx.state !== 'running') return;   // 音声はユーザー操作（VR 開始・トリガー）で初期化済みのときだけ
+  const ctx = audio.ctx, t0 = ctx.currentTime;
+  const tone = (freq, dur, vol, type = 'sine', at = 0) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.value = freq; g.gain.setValueAtTime(0, t0 + at); g.gain.linearRampToValueAtTime(vol, t0 + at + 0.005); g.gain.exponentialRampToValueAtTime(0.0005, t0 + at + dur);
+    o.connect(g); g.connect(ctx.destination); o.start(t0 + at); o.stop(t0 + at + dur + 0.02);
+  };
+  if (kind === 'tick') tone(500 + 900 * intensity, Math.min(0.12, 0.02 + ms / 1000 * 0.4), 0.05 + 0.12 * intensity, 'triangle');
+  else if (kind === 'ok') { tone(880, 0.09, 0.08); tone(1320, 0.14, 0.08, 'sine', 0.09); }
+  else if (kind === 'bad') { tone(220, 0.18, 0.1, 'sawtooth'); tone(180, 0.22, 0.08, 'sawtooth', 0.18); }
+  else if (kind === 'button') tone(1500, 0.03, 0.08, 'square');
+}
 function updateAudio(t) {
   if (!audio) return;
   const Tb = 60 / C.HEART_BPM, ph = (t % Tb) / Tb;
   const env = 0.3 + 0.9 * Math.exp(-((ph - 0.12) ** 2) / 0.01);
   audio.pulse.gain.setTargetAtTime(env, audio.ctx.currentTime, 0.02);
   audio.master.gain.setTargetAtTime(listening, audio.ctx.currentTime, 0.05);
-  if (audio.ctx.state === 'suspended') audio.ctx.resume();
+  if (audio.ctx.state === 'suspended' && t - (audio.resumeAt || -9) > 2) { audio.resumeAt = t; audio.ctx.resume().catch(() => {}); }   // 再開の試行は 2 秒に 1 回（警告の連発を避ける）
 }
 
 // ---------------------------------------------------------------- 移動（スティック）
@@ -1646,10 +2212,33 @@ function updateLocomotion(cs, gp, dt) {
   }
 }
 
+// ---------------------------------------------------------------- フレームレート
+// Quest 3 は 72/90/120Hz を選べる。90Hz を要求し、実測が目標の 88% を下回る状態が続いたら 72Hz に下げる（コマ落ちする 90 より安定した 72 の方が滑らか）
+const fps = { target: 0, frames: 0, time: 0, dropped: false, measured: 0 };
+function setupFrameRate() {
+  const session = renderer.xr.getSession(); if (!session?.supportedFrameRates || !session.updateTargetFrameRate) return;
+  const rates = Array.from(session.supportedFrameRates);
+  const want = rates.includes(90) ? 90 : rates.includes(72) ? 72 : null;
+  if (!want) return;
+  session.updateTargetFrameRate(want).then(() => { fps.target = want; fps.frames = 0; fps.time = 0; }).catch(() => {});
+}
+function updateFrameRate(dt) {
+  if (!fps.target || !renderer.xr.isPresenting) return;
+  fps.frames++; fps.time += dt;
+  if (fps.time < 4) return;
+  fps.measured = fps.frames / fps.time; fps.frames = 0; fps.time = 0;
+  if (fps.target === 90 && fps.measured < 90 * 0.88 && !fps.dropped) {
+    const session = renderer.xr.getSession();
+    if (session?.updateTargetFrameRate) session.updateTargetFrameRate(72).then(() => { fps.target = 72; fps.dropped = true; }).catch(() => {});
+  }
+}
+
 // ---------------------------------------------------------------- 毎フレーム
 let uiTimer = 0;
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+  updateFrameRate(dt);
+  if (titleMode) { titleLoop(dt, t); return; }
   const Tb = 60 / C.HEART_BPM, beat = Math.floor(t / Tb);
 
   const lidTarget = state.setOpen ? -1.95 : 0;
@@ -1691,17 +2280,26 @@ function loop() {
       if (cs.selectPressed && tp === false) onSelectEndXR(cs);
       if (cs.squeezePressed && sp === false) { cs.squeezePressed = false; onSelectEnd(cs); }
       if (gp.buttons[5]?.pressed) { cs.byHold += dt; if (cs.byHold > 1.0) { cs.byHold = -5; resetAll(); haptic(cs, 0.8, 150); } } else cs.byHold = 0;
+      // A/X（buttons[4]）を押す、または B/Y（buttons[5]）を短く押して離す = プローブを持っている手ならエコーのフリーズ／解除（B/Y の長押しはリセットのまま）
+      const ax = !!gp.buttons[4]?.pressed, by = !!gp.buttons[5]?.pressed;
+      if (cs.held?.kind === 'probe') {
+        if (ax && !cs.axPrev) toggleEchoFreeze(cs);
+        if (!by && cs.byPrev && cs.byHold >= 0 && cs.byHold < 0.6) toggleEchoFreeze(cs);
+      }
+      if (!by && cs.byPrev && cs.byHold < 0) cs.byHold = 0;
+      cs.axPrev = ax; cs.byPrev = by;
       updateLocomotion(cs, gp, dt);
     }
     const trig = gp?.buttons?.[0]?.value ?? (cs.selectPressed ? 1 : 0);
     const grip = gp?.buttons?.[1]?.value ?? (cs.squeezePressed ? 1 : 0);
     resetHandPush(cs);   // 前フレームの「腕からの押し戻し」を戻してから姿勢を更新
-    if (cs.tracked) { cs.hand.update(cs.xrHand); cs.xrHand.updateMatrixWorld(true); updateVirtualGrip(cs); }   // ハンドトラッキング: 関節の姿勢を手のモデルへ、関節から仮想の握りフレームを更新
+    if (cs.tracked) { cs.hand.update(cs.xrHand); cs.xrHand.updateMatrixWorld(true); updateVirtualGrip(cs, dt); }   // ハンドトラッキング: 関節の姿勢を手のモデルへ、関節から仮想の握りフレームを更新
     // 何も持たずにトリガーを引く = 人差し指を立てた「ポインティング」姿勢（物理ボタンを押す指）。ハンドトラッキングでは常に人差し指でボタンを押せる
-    cs.pointing = !cs.held && !cs.wrist && (cs.tracked || trig > 0.5);
+    cs.pointing = !cs.held && !cs.wrist && (cs.tracked || trig > 0.5 || grip > 0.5);   // トリガーでもグリップでも人差し指が立ち、ボタンを押せる
     let pose;
-    if (cs.held?.kind === 'needle') pose = 'pinch';
+    if (cs.held?.kind === 'needle') pose = cs.held.holdMode === 'ok' ? 'ok' : 'pinch';
     else if (cs.held?.kind === 'probe') pose = 'probe';
+    else if (cs.held?.name === 'stethoscope') pose = 'steth';
     else if (cs.wrist) pose = 'wrist';
     else if (cs.pointing) pose = 'point';
     else {
@@ -1711,7 +2309,7 @@ function loop() {
     }
     if (cs.hand.loaded && pose !== cs.lastPose) {
       cs.lastPose = pose;
-      cs.hand.setCurl(pose === 'pinch' ? PINCH_CURL[cs.side] : pose === 'probe' ? PROBE_CURL[cs.side] : pose === 'point' ? { ...POINT_CURL, ...NO_OPP } : pose === 'wrist' ? { ...WRIST_CURL, ...NO_OPP } : { ...cs.curl, ...NO_OPP });
+      cs.hand.setCurl(pose === 'pinch' ? PINCH_CURL[cs.side] : pose === 'ok' ? OK_CURL[cs.side] : pose === 'probe' ? PROBE_CURL[cs.side] : pose === 'steth' ? STETH_CURL[cs.side] : pose === 'point' ? { ...POINT_CURL, ...NO_OPP } : pose === 'wrist' ? { ...WRIST_CURL, ...NO_OPP } : { ...cs.curl, ...NO_OPP });
     }
     cs.ctrl.getWorldPosition(_v);
     if (cs.held?.toggle) { updateHeld(cs, cs.held, dt); updateHandContact(cs, dt); }   // プローブ・聴診器: 器具が皮膚で止まり、手はそれに追従
@@ -1721,19 +2319,63 @@ function loop() {
       else if (updatePalpation(cs, dt, beat)) palpating = true;
     }
     cs.lastPos.copy(_v);
+    updateHover(cs);
   }
-  updateLift(dt);
+  updateArmPose(dt);
   updateButtons(dt);
   if (!palpating && state.info.startsWith('触知')) { state.info = ''; uiDirty = true; }
   updateAudio(t);
 
   uiTimer += dt;
-  if (uiDirty || uiTimer > 0.12) { uiTimer = 0; drawUI(); }
+  if (uiDirty && uiTimer > 0.12) { uiTimer = 0; drawUI(); }
   renderer.render(scene, camera);
 }
 
+// タイトル画面のフレーム: 手の表示（人差し指を立てた形）とキーの押し込みだけ。ロゴはゆっくり浮き沈みして少し揺れる
+function titleLoop(dt, t) {
+  // 頭の追跡が有効になってから（高さ 0.5m 以上）2.5 秒間はロゴとパネルを頭の正面に追従させ、その後は固定（開始直後の向きの乱れを吸収する）
+  if (renderer.xr.isPresenting && title.pending !== false) {
+    const hy = headPos(_v).y - dolly.position.y;
+    if (hy > 0.5) { if (title.pending === true) { title.pending = t + 2.5; } placeTitleInFront(); if (t > title.pending) title.pending = false; }
+  }
+  for (const cs of controllers) {
+    const gp = cs.inputSource?.gamepad;
+    if (gp) { const tp = gp.buttons[0]?.pressed, sp = gp.buttons[1]?.pressed; if (cs.selectPressed && tp === false) cs.selectPressed = false; if (cs.squeezePressed && sp === false) cs.squeezePressed = false; updateLocomotion(cs, gp, dt); }   // スティックで移動・向き・高さ
+    resetHandPush(cs);
+    if (cs.tracked) { cs.hand.update(cs.xrHand); cs.xrHand.updateMatrixWorld(true); updateVirtualGrip(cs, dt); }
+    const trig = gp?.buttons?.[0]?.value ?? (cs.selectPressed ? 1 : 0), grip = gp?.buttons?.[1]?.value ?? (cs.squeezePressed ? 1 : 0);
+    cs.pointing = cs.tracked || trig > 0.5 || grip > 0.5;   // トリガーかグリップを握ると人差し指を立てた手になり、その状態でだけキーを押せる
+    const pose = cs.pointing ? 'point' : 'rest';
+    if (cs.hand.loaded && cs.lastPose !== pose) { cs.lastPose = pose; cs.hand.setCurl(pose === 'point' ? { ...POINT_CURL, ...NO_OPP } : { thumb: 0.3, index: 0.2, middle: 0.25, ring: 0.3, pinky: 0.35, thumbOpp: 0 }); }
+  }
+  updateButtons(dt);
+  title.t += dt;
+  title.slab.position.y = 2.5 + 0.04 * Math.sin(title.t * 0.8); title.slab.rotation.y = 0.05 * Math.sin(title.t * 0.5); title.slab.rotation.x = -0.22 + 0.03 * Math.sin(title.t * 0.7 + 1);
+  renderer.render(scene, camera);
+}
+
+// 掴める物の目印: 何も持っていない手の「掴む基準点」から掴める範囲にある器具（または患者の手首・肘）に水色の輪を出す。
+// つまむ前に何が取れるかが分かる（ハンドトラッキングでは手応えがないので特に重要）。輪は常にカメラの方を向く
+const _hv = { p: new THREE.Vector3(), c: new THREE.Vector3() };
+function updateHover(cs) {
+  if (!cs.hoverRing) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.011, 0.015, 28), new THREE.MeshBasicMaterial({ color: 0x7fe3ff, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
+    ring.renderOrder = 20; ring.visible = false; scene.add(ring); cs.hoverRing = ring;
+  }
+  const ring = cs.hoverRing;
+  if (cs.wrist || (cs.held && !clampNear(cs, _hv.c))) { ring.visible = false; return; }   // 何か持っていても、反対の手の針のクランプには輪を出す
+  grabPoint(cs, _hv.p);
+  let target = null;
+  const part = armHoldCandidate(cs, _hv.p);
+  if (clampNear(cs, _hv.c)) target = _hv.c;   // 金属針のクランプ（人差し指の先で開け閉め）
+  else if (part) target = part === 'wrist' ? P.wristNow(_hv.c) : P.elbowNow(_hv.c);
+  else { const t = nearestTool(cs, _hv.p); if (t) target = t.obj.localToWorld(_hv.c.copy(t.grabOffset)); }
+  if (!target) { ring.visible = false; return; }
+  ring.visible = true; ring.position.copy(target); ring.lookAt(headPos(_v4));
+}
+
 // エコー: プローブを持っている間、血管・針のデータを渡して B モード画像を生成。深い血管モードでは「血管を描出」ステップを判定
-const _ea = new THREE.Vector3(), _eb = new THREE.Vector3();
+const _ea = new THREE.Vector3(), _eb = new THREE.Vector3(), _ed = new THREE.Vector3(), _ee = new THREE.Vector3();
 // プローブと腕の接触: レンズ面は皮膚の中へ 3mm（圧迫分）までしか入らない。それ以上手を押し込んでも、プローブは皮膚の上に留まって
 // 腕の表面を滑る（手だけが腕の中へ進む）。皮膚に触れた瞬間に振動、押し込みすぎは小刻みな振動で知らせる
 const PROBE_PRESS_MAX = PRESS_MAX;
@@ -1745,6 +2387,7 @@ function updateProbeContact(cs, tool, dt, face = null, pressMax = PROBE_PRESS_MA
   o.position.copy(tool.holdPos || tool.gripPos); o.quaternion.copy(tool.holdQuat || tool.gripQuat);   // 手の中の基準位置からやり直す（前フレームの押し戻しを持ち越さない）
   o.updateMatrixWorld(true);
   const F = face ? o.localToWorld(_pc.f.copy(face)) : o.getWorldPosition(_pc.f);
+  P.toArm(F, F);   // 腕の基準姿勢の座標で判定
   let contact = false, press = 0;
   tool.pushWorld = tool.pushWorld || new THREE.Vector3(); tool.pushWorld.set(0, 0, 0);
   if (C.onArm(F.x)) {
@@ -1757,6 +2400,7 @@ function updateProbeContact(cs, tool, dt, face = null, pressMax = PROBE_PRESS_MA
       if (dist < minDist) {
         press = minDist - dist;                                        // 皮膚より深く押し込んだ量 → 押し戻す
         _pc.d.copy(_pc.r).normalize().multiplyScalar(press);
+        P.toWorldDir(_pc.d, _pc.d, F.x);                                 // 押し戻し（皮膚の法線方向）をワールドへ
         tool.pushWorld.copy(_pc.d);                                      // 手もこの分だけ追従させる（updateHandContact）
         _pc.d2.copy(_pc.d).applyQuaternion(cs.ctrl.getWorldQuaternion(_pc.q).invert());
         o.position.add(_pc.d2);
@@ -1768,7 +2412,16 @@ function updateProbeContact(cs, tool, dt, face = null, pressMax = PROBE_PRESS_MA
   if (press > 0.006) { tool.buzz = (tool.buzz || 0) + dt; if (tool.buzz > 0.1) { tool.buzz = 0; haptic(cs, 0.12, 30); } }   // 押し込みすぎ（手が腕の中）
   tool.contact = contact; tool.press = press;
 }
-let echoError = false;
+let echoError = false, echoFrame = 0;
+// プローブの姿勢を腕の基準姿勢の座標へ変換したもの（エコーは血管・皮膚と同じ座標系で計算する。腕の向きを変えても画像が追従する）
+const _pcn = new THREE.Object3D();
+function probeCanon(obj) {
+  obj.updateMatrixWorld(true);
+  obj.getWorldPosition(_pcn.position); obj.getWorldQuaternion(_pcn.quaternion);
+  P.toArm(_pcn.position, _pcn.position);
+  _pcn.quaternion.premultiply(P.frameQuat(_pcn.position.x, _q).invert());
+  return _pcn;
+}
 function updateEcho(dt, t, Tb) {
   const probe = tools.probe;
   if (!probe?.held || echoError) return;
@@ -1785,17 +2438,33 @@ function updateEchoInner(probe, dt, t, Tb) {
     const ud = n.obj.userData;
     if (!(n.held || n.stuck)) continue;
     n.obj.updateMatrixWorld(true);
+    // 基準姿勢の座標で渡す（血管と同じ座標系）。プローブが静脈をつぶしているときは、血管内の針先が血管の中心へ寄る分だけ針全体をビーム方向に動かす
+    // （実際も針は内腔に留まったまま血管がつぶれる。エコー上で針だけ血管の外に見えないように）
+    const seg = (z0, z1) => {
+      P.toArm(n.obj.localToWorld(_ea.set(0, 0, z0)), _ea); P.toArm(n.obj.localToWorld(_eb.set(0, 0, z1)), _eb);
+      const es = echo.state;
+      if (es.contact && es.press > 0) {
+        const cl = P.vessel.closest(_eb);
+        if (cl.kind === 'vein' && cl.d < cl.r * 1.3) {
+          const D = _ed.set(0, -1, 0).applyQuaternion(_pcn.quaternion);                 // ビーム方向（基準姿勢の座標）
+          const vd = _ee.subVectors(_eb, cl.point).dot(D), f = veinFlatten(es.press, es.turgor);
+          _ea.addScaledVector(D, -vd * f); _eb.addScaledVector(D, -vd * f);
+        }
+      }
+    };
     if (ud.type === 'metal') {
-      n.obj.localToWorld(_ea.set(0, 0, 0.0)); n.obj.localToWorld(_eb.set(0, 0, ud.tipZ));
+      seg(0, ud.tipZ);
       echo.setNeedle(k++, _ea, _eb, 0.00085, 1.0);
     } else {
-      n.obj.localToWorld(_ea.set(0, 0, 0.0)); n.obj.localToWorld(_eb.set(0, 0, ud.cannulaTipZ));
+      seg(0, ud.cannulaTipZ);
       echo.setNeedle(k++, _ea, _eb, -0.001, 0.7);                                        // プラスチック外筒: 中空（負の半径）= 前壁・後壁の 2 本の線として金属より暗く映る
-      if (!n.styletOut) { n.obj.localToWorld(_ea.set(0, 0, 0.0)); n.obj.localToWorld(_eb.set(0, 0, ud.tipZ)); echo.setNeedle(k++, _ea, _eb, 0.0008, 1.0); }
+      if (!n.styletOut) { seg(0, ud.tipZ); echo.setNeedle(k++, _ea, _eb, 0.0008, 1.0); }
     }
   }
   const pulse = Math.max(0, Math.sin(t * Math.PI * 2 / Tb)) ** 2;
-  const es = echo.update(probe.obj, dt, pulse, t);
+  // 画像は 1 フレームおきに生成（実機の 30 フレーム/秒相当。計測・接触判定は毎フレーム）
+  echoFrame++;
+  const es = echo.update(probeCanon(probe.obj), dt, pulse, t, (echoFrame & 1) === 0 || !renderer.xr.isPresenting);
   // 深い血管モード: 穿刺対象の静脈がセンターラインの近く（4mm 以内）に 2 秒間描出されたら完了
   if (es.contact && es.centerVein && es.centerVein.kind !== 'artery' && es.centerVein.latAbs < 0.004 && !state.done.echo && STEPS.some(s => s.id === 'echo')) {
     state.echoTime += dt;
@@ -1803,19 +2472,43 @@ function updateEchoInner(probe, dt, t, Tb) {
     if (state.echoTime >= 2) { addLog(`エコーで血管を描出 ✔（深さ ${es.depthMm.toFixed(1)}mm, 径 ${es.diaMm.toFixed(1)}mm）`, 'ok'); completeStep('echo'); state.info = ''; }
   } else if (state.info.startsWith('エコー:')) { state.info = ''; uiDirty = true; }
 }
-// 患者の前腕: 手首を持った手の高さに追従して肘から持ち上がる（上限 MAX_LIFT）。離すとゆっくり下りる
-const FOREARM_L = C.WRIST_X - C.ELBOW_X;
-function updateLift(dt) {
+// 患者の腕の姿勢: 手首を持つ手の位置で前腕の持ち上げ（肘から）と内外の振り、手のひねりで回内外、肘を持つ手の位置で腕全体の外転を決める。
+// 持ち上げは離すとゆっくり下りて腕置きに戻るが、内外・回内外・外転はそのまま保たれる（寝ている患者の腕をその位置に置いたまま穿刺できる）
+const LIFT0 = Math.atan2(C.WRIST_LIFT, C.WRIST_X - C.ELBOW_X);   // 基準姿勢の前腕のわずかな傾き
+const _ap = { d: new THREE.Vector3(), q: new THREE.Quaternion(), ax: new THREE.Vector3(), dE: new THREE.Vector3() };
+function updateArmPose(dt) {
   const holder = controllers.find(c => c.wrist);
-  let target = 0;
+  const pose = P.pose, cl = (k, v) => THREE.MathUtils.clamp(v, ARM_LIMITS[k][0], ARM_LIMITS[k][1]);
+  const target = { abduct: pose.abduct, yaw: pose.yaw, lift: 0, roll: pose.roll };
   if (holder) {
-    holder.ctrl.getWorldPosition(_v);
-    target = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp((_v.y - 0.02 - P.wrist.y) / FOREARM_L, -1, 1)), 0, MAX_LIFT);
-    if (_v.distanceTo(P.wristNow(_v2)) > 0.3) { holder.wrist = false; holder.lastPose = ''; target = 0; }   // 手が離れすぎたら手を離したことにする
+    const h = holder.armHold;
+    holder.ctrl.getWorldPosition(_v).sub(h.off);                       // 手首/肘の目標位置（ワールド）
+    if (h.part === 'wrist') {
+      if (_v.distanceTo(P.wristNow(_v2)) > 0.35) { holder.wrist = false; holder.lastPose = ''; }   // 手が離れすぎたら離したことにする
+      else {
+        _ap.d.subVectors(_v, P.elbowNow(_v2)).applyQuaternion(P.armRootQuat(_ap.q).invert());   // 肘から見た手首の方向（上腕の座標系）
+        const horiz = Math.hypot(_ap.d.x, _ap.d.z);
+        target.lift = cl('lift', Math.atan2(_ap.d.y, horiz) - LIFT0);
+        target.yaw = cl('yaw', Math.atan2(_ap.d.z, Math.max(0.05, _ap.d.x)));
+        // 手のひねり: 持った時からの回転のうち前腕の軸まわりの成分（swing-twist 分解）だけを回内外に使う
+        holder.grip.getWorldQuaternion(_ap.q).multiply(h.q0inv);
+        P.toWorldDir(_ap.ax.set(1, 0, 0), _ap.ax);
+        const twist = 2 * Math.atan2(_ap.ax.x * _ap.q.x + _ap.ax.y * _ap.q.y + _ap.ax.z * _ap.q.z, _ap.q.w);
+        target.roll = cl('roll', h.roll0 - twist);
+      }
+    } else {
+      if (_v.distanceTo(P.elbowNow(_v2)) > 0.35) { holder.wrist = false; holder.lastPose = ''; }
+      else {
+        _ap.d.subVectors(_v, P.S); _ap.dE.subVectors(P.E, P.S);
+        target.abduct = cl('abduct', Math.atan2(_ap.d.z, _ap.d.x) - Math.atan2(_ap.dE.z, _ap.dE.x));
+      }
+      target.lift = pose.lift;
+    }
   }
-  const rate = holder ? 10 : 3;
-  const next = P.lift + (target - P.lift) * Math.min(1, dt * rate);
-  if (Math.abs(next - P.lift) > 1e-5) P.setLift(next);
+  const rate = holder ? 10 : 3, k = Math.min(1, dt * rate);
+  const next = {}; let changed = false;
+  for (const key of ['abduct', 'yaw', 'lift', 'roll']) { next[key] = pose[key] + (target[key] - pose[key]) * k; if (Math.abs(next[key] - pose[key]) > 1e-5) changed = true; }
+  if (changed) P.setPose(next);
 }
 function updateFlow(dt) {
   if (state.flowT < 0 || state.flowDone) return;
@@ -1834,8 +2527,8 @@ function updateFlow(dt) {
     { dur: 1.2, fn: p => {
       const n = tools.needleV; if (!n || n.inVessel) return;
       if (!state.vLeak) { state.vLeak = true; penalty(20, 'V針の先端が血管外: 返血が皮下に漏れて腫脹（静脈圧上昇アラーム → ポンプ停止）。抜針して圧迫し、再穿刺'); haptic(controllers[0], 1, 300); }
-      const ud = n.obj.userData; n.obj.localToWorld(_v3.set(0, 0, (ud.type === 'cannula' && n.styletOut) ? ud.cannulaTipZ : ud.tipZ));
-      const sw = P.swelling; sw.visible = true; sw.position.copy(P.forearm.worldToLocal(_v3.set(_v3.x, C.skinY(_v3.x, _v3.z) - 0.004, _v3.z)));
+      const ud = n.obj.userData; P.toArm(n.obj.localToWorld(_v3.set(0, 0, (ud.type === 'cannula' && n.styletOut) ? ud.cannulaTipZ : ud.tipZ)), _v3);
+      const sw = P.swelling; sw.visible = true; P.placeCanon(sw, _v3.set(_v3.x, C.skinY(_v3.x, _v3.z) - 0.004, _v3.z));
       sw.scale.set(1.6 * p, 0.45 * p, 1.2 * p);
       if (p >= 1) { state.pumpOn = false; room.setPumpRunning(false); state.flowDone = true; }
     } },
@@ -1855,39 +2548,47 @@ function updateFlow(dt) {
 // 手のモデル（指先・指の関節・掌）は患者の腕の中へ入らず、皮膚の外へ押し戻される。押し戻しは手に持っている器具にも同じだけ加える
 // （手と器具は一体）。→ 針は「つまんだ指が皮膚に当たる所」まで刺さり、手が腕をすり抜けて深さが分からなくなることがない。
 // プローブ・聴診器は器具側の接触判定で皮膚に止まり（updateProbeContact）、手はその押し戻しに追従した上で、さらに指が腕に入る分だけ戻る
-const _hc = { p: new THREE.Vector3(), push: new THREE.Vector3(), extra: new THREE.Vector3(), q: new THREE.Quaternion(), l: new THREE.Vector3() };
-const HAND_R = { tip: 0.008, joint: 0.011, palm: 0.016, pinchTip: 0.005 };   // 判定に使う各点の半径（指先・指の関節・掌・針をつまんだ指先）
+const _hc = { p: new THREE.Vector3(), c: new THREE.Vector3(), u: new THREE.Vector3(), push: new THREE.Vector3(), extra: new THREE.Vector3(), q: new THREE.Quaternion(), l: new THREE.Vector3() };
+const HAND_R = { tip: 0.008, joint: 0.011, palm: 0.016 };   // 判定に使う各点の半径（指先・指の関節・掌）
 function resetHandPush(cs) {
-  cs.push.set(0, 0, 0);
+  cs.push?.set(0, 0, 0);
   if (cs.tracked) cs.hand.group.position.set(0, 0, 0);
   else if (cs.holder) cs.holder.position.set(0, 0, 0);
-  cs.toolRoot.position.set(0, 0, 0);
+  cs.toolRoot?.position.set(0, 0, 0);
 }
 // 手の各点の腕への侵入量（最大）と、その点を皮膚の外へ出す押し戻しベクトル（ワールド、腕の軸から放射方向）
 function handPenetration(cs, out) {
   out.set(0, 0, 0);
   if (P.lift > 0.02 || !cs.hand?.loaded) return 0;
   let best = 0;
-  // 押し戻しは真上（+y）へ: 手は腕の上面〜側面に上から当たるので、各点を「その真上の皮膚面 + 点の半径」まで持ち上げる量の最大を取る。
+  // 押し戻しは真上（ワールド +y）へ: 手は腕の上面〜側面に上から当たるので、各点を「その真上の皮膚面 + 点の半径」まで持ち上げる量の最大を取る。
+  // 判定は腕の基準姿勢の座標で行い（腕を回しても皮膚の位置が合う）、真上方向 u は腕の座標系へ変換して使う。
   // 側面（軸から横へ 0.85 半径より外）は皮膚面が急なので、そこでは 0.85 半径の位置の高さで止める（押し戻しが暴れない）
-  const test = (p, rs) => {
+  P.toArmDir(_hc.u.set(0, 1, 0), _hc.u); { const n = Math.hypot(_hc.u.y, _hc.u.z) || 1; _hc.u.y /= n; _hc.u.z /= n; }
+  const uy = _hc.u.y, uz = _hc.u.z;
+  const test = (pw, rs) => {
+    const p = P.toArm(pw, _hc.c);
     if (!C.onArm(p.x)) return;
-    const a = C.armAt(p.x), dz = p.z - a.z;
-    if (Math.abs(dz) > a.r + rs || p.y < a.y - 0.3 * a.r) return;      // 腕の横・下側は押さない
-    const dzc = THREE.MathUtils.clamp(dz, -0.85 * a.r, 0.85 * a.r);
-    const pen = C.skinY(p.x, a.z + dzc) + rs - p.y;
+    const a = C.armAt(p.x), R = a.r + rs;
+    const qy = p.y - a.y, qz = p.z - a.z;
+    const along = qy * uy + qz * uz;                                   // 点の高さ（腕軸から真上方向）
+    const ly = qy - along * uy, lz = qz - along * uz, lat = Math.hypot(ly, lz);   // 横ずれ
+    if (lat > R || along < -0.3 * a.r) return;                         // 腕の横・下側は押さない
+    const latC = Math.min(lat, 0.85 * a.r);
+    const pen = Math.sqrt(Math.max(0, R * R - latC * latC)) - along;
     if (pen > best) { best = pen; out.set(0, pen, 0); }
   };
   let name = '';
   // 針をつまんでいる手: 皮膚に当たるのは親指・人差し指（つまんだ指の腹は平らにつぶれる）と掌。曲げた中指〜小指は腕の上に軽く添える（判定しない）
-  const pinch = cs.held?.kind === 'needle';
+  // 針を持っているときは指は判定しない（指は腕に触れても食い込んでよい = 皮膚を押さえている表現）。掌（中手骨）だけが腕を貫通しない
+  const ndl = cs.held?.kind === 'needle';
   for (const f of ['thumb', 'index', 'middle', 'ring', 'pinky']) {
     const bones = cs.hand.bones[f]; if (!bones) continue;
     for (let i = 0; i < bones.length; i++) {
-      if (pinch && i > 0 && f !== 'thumb' && f !== 'index') continue;
+      if (ndl && i > 0) continue;
       bones[i].getWorldPosition(_hc.p);
       const b0 = best;
-      test(_hc.p, i === 0 ? HAND_R.palm : i === bones.length - 1 ? (pinch ? HAND_R.pinchTip : HAND_R.tip) : HAND_R.joint);   // 中手骨（掌）・関節・指先
+      test(_hc.p, i === 0 ? HAND_R.palm : i === bones.length - 1 ? HAND_R.tip : HAND_R.joint);   // 中手骨（掌）・関節・指先
       if (best > b0) name = `${f}${i}`;
     }
   }
@@ -1929,19 +2630,46 @@ function updateHandContact(cs, dt) {
   cs.touching = pen > 0.001;
 }
 
+// 人差し指を立てた手か: コントローラーはトリガー/グリップを引いた状態（cs.pointing）、ハンドトラッキングは人差し指が伸び中指が曲がっている形
+const _pg = { w: new THREE.Vector3(), i: new THREE.Vector3(), m: new THREE.Vector3() };
+function isPointingHand(cs) {
+  if (!cs.tracked) return !!cs.pointing;
+  const j = cs.hand?.joints; if (!j?.wrist || !j['index-finger-tip'] || !j['middle-finger-tip']) return false;
+  j.wrist.getWorldPosition(_pg.w); j['index-finger-tip'].getWorldPosition(_pg.i); j['middle-finger-tip'].getWorldPosition(_pg.m);
+  return _pg.i.distanceTo(_pg.w) > 0.14 && _pg.m.distanceTo(_pg.w) < 0.12;
+}
+// 触知: 何も持たず人差し指を立てた手で、指先が皮膚に触れていて、その真下（横ずれが血管の半径の 90% 以内 = 内腔の真上）に血管があるときだけ拍動が伝わる
+// （実際の穿刺でも指先に伝わる拍動の真下の血管を刺す。針やプローブを持っている手には伝わらない）
+// 触知の基準点: 人差し指の先（メッシュの先端）。そこから真下に下ろした所の血管を感じる
+function palpPoint(cs, out) { return fingerTip(cs, out); }
+// 触知:
+//  - 手順「スリルを触知」の最中（学習モード）: トリガーもグリップも握らない開いた手で腕に触れるだけで、人差し指か中指の先の近く（血管の半径 + 1.5cm）に血管があれば拍動が伝わる
+//  - それ以外（穿刺時）: 人差し指を立てた手で、指先の真下（横ずれが半径の 90% 以内 = 内腔の真上）に血管があるときだけ。そこへ垂直に刺せば必ず血管に入る
+const _pp2 = new THREE.Vector3();
 function updatePalpation(cs, dt, beat) {
-  if (P.lift > 0.02 || cs.wrist) return false;
-  fingerTip(cs, _v3);
-  const cl0 = C.onArm(_v3.x) ? P.vessel.closest(_v3) : null;
-  const on = !!cl0 && cl0.d < 0.03 && cl0.kind !== 'artery' && !cl0.branch.comitant;
-  if (!on) return false;
+  if (P.lift > 0.02 || cs.wrist || cs.held) return false;
+  const learning = !state.done.palpate, pointing = isPointingHand(cs);
+  if (!learning && !pointing) return false;
+  let cl0 = null, tol = 0;
+  for (const name of pointing ? ['index'] : ['index', 'middle']) {
+    if (!fingerTipOf(cs, name, _pp2)) continue;   // 指先 = メッシュの先端（tip ボーンの 11mm 先）
+    P.toArm(_pp2, _pp2);
+    if (!C.onArm(_pp2.x)) continue;
+    const sy = C.skinY(_pp2.x, _pp2.z);
+    if (!(_pp2.y < sy + 0.018 && _pp2.y > sy - 0.03)) continue;   // 指先が皮膚に触れている（皮膚の上 1.8cm 以内）
+    const c = P.vessel.closestBelow(_pp2);                          // 指先の真下にある穿刺対象の血管（最も横ずれの小さいもの）
+    if (!c) continue;
+    const t = pointing ? c.r * 0.9 : c.r + 0.015;
+    if (c.horiz <= t && (!cl0 || c.horiz < cl0.horiz)) { cl0 = c; tol = t; }
+  }
+  if (!cl0) return false;
   if (beat !== cs.lastBeat) { cs.lastBeat = beat; haptic(cs, state.tourniquetOn ? 0.9 : 0.6, 45); }
   if (!state.done.palpate) {
     if (state.palpateTime === 0) requireGloves();
     state.palpateTime += dt;
-    state.info = `触知中… スリルを感じます ${Math.min(2.5, state.palpateTime).toFixed(1)} / 2.5 秒`;
+    state.info = `触知中… スリルを感じます ${Math.min(1, state.palpateTime).toFixed(1)} / 1.0 秒`;
     uiDirty = true;
-    if (state.palpateTime >= 2.5) { addLog('スリル良好：連続性の振動を触知', 'info'); completeStep('palpate'); state.info = ''; }
+    if (state.palpateTime >= 1.0) { addLog('スリル良好：連続性の振動を触知', 'info'); completeStep('palpate'); state.info = ''; }   // 触知は 1 秒（聴診は 3 秒のまま）
   }
   return true;
 }
@@ -1955,7 +2683,7 @@ function updateHeld(cs, tool, dt) {
       steth.binaural.getWorldPosition(_v2); headPos(_v3);
       if (_v2.distanceTo(_v3) < 0.22) wearSteth();
     }
-    tool.obj.getWorldPosition(_v2);
+    P.toArm(tool.obj.getWorldPosition(_v2), _v2);
     const on = P.lift < 0.02 && C.onArm(_v2.x) && V.closest(_v2).d < 0.045;
     if (on && state.listenTime === 0) requireGloves();
     if (on && !state.stethWorn) {
@@ -1990,7 +2718,7 @@ function updateHeld(cs, tool, dt) {
     }
   }
   else if (tool.kind === 'cotton') {
-    tool.obj.getWorldPosition(_v2);
+    P.toArm(tool.obj.getWorldPosition(_v2), _v2);
     const aa = C.armAt(_v2.x);
     // 綿の底面の中心（器具の原点）が皮膚に触れている（皮膚から 8mm 以内。浮かせているときは消毒にならず、色も付かない）
     const touching = P.lift < 0.02 && C.onArm(_v2.x) && Math.abs(_v2.z - aa.z) < aa.r * 0.8 && _v2.y > aa.y && Math.abs(_v2.y - C.skinY(_v2.x, _v2.z)) < 0.008;
@@ -2023,8 +2751,8 @@ function updateHeld(cs, tool, dt) {
   else if (tool.kind === 'needle') {
     const n = tool.obj, ud = n.userData, cannula = ud.type === 'cannula';
     const tipZ = (cannula && tool.styletOut) ? ud.cannulaTipZ : ud.tipZ;
-    _v.set(0, 0, tipZ); n.localToWorld(_v);
-    _v2.set(0, 0, -1).applyQuaternion(n.getWorldQuaternion(_q));
+    _v.set(0, 0, tipZ); n.localToWorld(_v); P.toArm(_v, _v);                                      // 針先と向き（腕の基準姿勢の座標）
+    _v2.set(0, 0, -1).applyQuaternion(n.getWorldQuaternion(_q)); P.toArmDir(_v2, _v2);
     if (P.lift > 0.02 && !tool.punctured) { state.info = '患者の腕を下ろしてから穿刺してください'; uiDirty = true; return; }
     const aa = C.armAt(_v.x);
     const inArea = C.onArm(_v.x) && Math.abs(_v.z - aa.z) < aa.r;
@@ -2048,7 +2776,7 @@ function updateHeld(cs, tool, dt) {
       else addLog('消毒範囲内に穿刺 ✔', 'ok');
       // エコーガイド下か（プローブが皮膚に接し、刺入点から 5cm 以内）
       const es = echo.state, probe = tools.probe;
-      const guided = probe?.held && es.contact && probe.obj.getWorldPosition(_v3).distanceTo(_v) < 0.05;
+      const guided = probe?.held && es.contact && P.toArm(probe.obj.getWorldPosition(_v3), _v3).distanceTo(_v) < 0.05;
       if (guided) addLog('エコーガイド下に穿刺 ✔', 'ok');
       else if (V.deep) penalty(10, '深い血管をエコーなしで穿刺（ブラインド穿刺）');
       if (V.cfg.usesTourniquet && !state.tourniquetOn) penalty(10, '駆血せずに穿刺（血管が怒張していない）');
@@ -2057,10 +2785,10 @@ function updateHeld(cs, tool, dt) {
       const site = V.sites[tool.site];
       if (Math.hypot(_v.x - site.x, _v.z - site.z) > 0.035) penalty(5, `${tool.site}針の穿刺位置が目標からずれています`);
       const other = tools[tool.site === 'A' ? 'needleV' : 'needleA'];
-      if (other?.stuck) { other.obj.getWorldPosition(_v3); if (_v3.distanceTo(_v) < 0.05) penalty(5, 'A針とV針の間隔が近すぎます（再循環のおそれ）'); }
+      if (other?.stuck) { P.toArm(other.obj.getWorldPosition(_v3), _v3); if (_v3.distanceTo(_v) < 0.05) penalty(5, 'A針とV針の間隔が近すぎます（再循環のおそれ）'); }
       const oc = otherController(cs);
       let fixed = false;
-      if (oc && !oc.held) { fingerTip(oc, _v3); fixed = _v3.distanceTo(_v) < 0.09 && _v3.y < sy + 0.05; }
+      if (oc && !oc.held) { P.toArm(fingerTip(oc, _v3), _v3); fixed = _v3.distanceTo(_v) < 0.09 && _v3.y < sy + 0.05; }
       if (fixed) addLog('皮膚を伸展・固定して穿刺 ✔', 'ok'); else penalty(5, '皮膚の固定なし（反対の手で穿刺部の皮膚を伸展）');
     }
     if (tool.punctured) {
@@ -2088,7 +2816,7 @@ function updateHeld(cs, tool, dt) {
       if (!tool.styletOut) setFlash(tool, inVessel || tool.perforated);
       if (!tool.perforated && _v.y < cl.point.y - r && cl.horiz < r + 0.004) {
         tool.perforated = true; tool.inVessel = false;
-        P.hematoma.visible = true; P.hematoma.position.copy(P.forearm.worldToLocal(_v3.set(_v.x, sy, _v.z)));
+        P.hematoma.visible = true; P.placeCanon(P.hematoma, _v3.set(_v.x, sy, _v.z));
         penalty(25, (config.vessel === 'avg' ? '人工血管' : '血管') + '後壁を穿破しました（血腫）。抜針して再穿刺');
         haptic(cs, 1, 200);
       }
@@ -2105,6 +2833,7 @@ function updateHeld(cs, tool, dt) {
 // ---------------------------------------------------------------- VR 開始ボタン
 function setupVRButton() {
   const btn = document.getElementById('vrbtn'), info = document.getElementById('info');
+  if (location.search.includes('noui=1')) document.getElementById('overlay').style.display = 'none';   // デバッグ描画用: 画面下の案内を隠す
   if (!navigator.xr) {
     btn.textContent = 'WebXR 非対応ブラウザ';
     info.innerHTML += '<br><span style="color:#ffd166">このブラウザは WebXR に対応していません。Quest のブラウザで開いてください（マウスで見学は可能）。</span>';
@@ -2116,7 +2845,7 @@ function setupVRButton() {
     btn.onclick = async () => {
       if (renderer.xr.isPresenting) { renderer.xr.getSession().end(); return; }
       try {
-        const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers'] });
+        const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers', 'high-refresh-rate'] });
         session.addEventListener('end', () => { btn.textContent = 'VR を開始'; });
         await renderer.xr.setSession(session);
         btn.textContent = 'VR を終了';

@@ -17,9 +17,9 @@ import * as C from './constants.js';
 const NSEG = 80;
 export const PROBE_W = 0.038, IMG_DEPTH = 0.03;
 export const PRESS_MAX = 0.005;   // レンズ面が皮膚に沈み込める最大量 [m]
-// 静脈の扁平化は押し込みに対して非線形: 軽く当てた程度（PRESS_MAX の 35% ≈ 1.7mm まで）ではつぶれず、強く押すほどつぶれて最大で 85% 扁平化。
+// 静脈の扁平化は押し込みに対して非線形: 押し込みが PRESS_MAX の 50%（2.5mm）まではつぶれず、強く押すほどつぶれて最大で 70% 扁平化（駆血時は最大 10%）。
 // 針先の確認（長軸）は軽い接触で、血管の同定（圧迫法）は強く押す、という使い分けができる
-export const veinFlatten = (press, turgor = 0) => 0.85 * (t => t * t * (3 - 2 * t))(Math.min(1, Math.max(0, (press - 0.35) / 0.65))) * (1 - 0.75 * turgor);
+export const veinFlatten = (press, turgor = 0) => 0.7 * (t => t * t * (3 - 2 * t))(Math.min(1, Math.max(0, (press - 0.5) / 0.5))) * (1 - 0.85 * turgor);
 
 const std = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, ...extra });
 function box(w, h, d, m, x = 0, y = 0, z = 0) { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); o.castShadow = true; o.receiveShadow = true; return o; }
@@ -40,7 +40,7 @@ function textTex(w, h, draw) {
 }
 
 // ---------------------------------------------------------------- プローブ（富士フイルム iViz air リニアプローブ FWTL10-5 の製品写真を参考）
-// 形: 黒いグラファイト調の本体。先端のヘッドは幅広（58mm）で薄く（19mm）、握りは細く（40mm 幅・28mm 厚）、下端は丸い。全長 約 165mm、重さ 147g。
+// 形: 黒いグラファイト調の本体。先端のヘッドは幅広（58mm）で薄く（8mm）、握りは細く（40mm 幅・14mm 厚）、下端は丸い。全長 約 165mm。
 // 前面（親指側）: ヘッドに「10-5」の表示と白い▼のセンターマーク、握りに縦長の親指の溝、丸いくぼみ、電源・フリーズの 2 つの丸ボタン、
 // バッテリー LED、FUJIFILM ロゴ、無線マーク。センターマークはヘッドの前面・背面と両側面の中央にあり、走査面の中心（画像の中央の▼）を示す。
 // エコー下穿刺ではこのマークに針を合わせる（短軸: マークの位置で刺すと針が画像の中央に出る。長軸: マークの面に沿って刺す）
@@ -60,37 +60,38 @@ export function makeProbe() {
   hs.moveTo(-0.026, 0.002); hs.lineTo(0.026, 0.002); hs.lineTo(0.026, 0.024);
   hs.bezierCurveTo(0.026, 0.04, 0.017, 0.044, 0.017, 0.06); hs.lineTo(-0.017, 0.06);
   hs.bezierCurveTo(-0.017, 0.044, -0.026, 0.04, -0.026, 0.024); hs.closePath();
-  g.add(extrude(hs, 0.013, 0.003, body));
+  g.add(extrude(hs, 0.005, 0.0015, body));                                    // ヘッドの厚み 8mm
   // 握り: 幅 40mm、厚さ 28mm、下端は丸い
   const gs = new THREE.Shape(); const hw = 0.017, y0 = 0.05, y1 = 0.165, r = 0.015;
   gs.moveTo(-hw, y0); gs.lineTo(hw, y0); gs.lineTo(hw, y1 - r); gs.quadraticCurveTo(hw, y1, hw - r, y1); gs.lineTo(-hw + r, y1); gs.quadraticCurveTo(-hw, y1, -hw, y1 - r); gs.closePath();
-  g.add(extrude(gs, 0.022, 0.003, body));
+  g.add(extrude(gs, 0.011, 0.0015, body));                                    // 握りの厚み 14mm
   // 音響レンズ（先端の少し明るいグレーの面）
-  g.add(rbox(0.05, 0.004, 0.011, 0.0015, lensM, 0, 0.001, 0));
+  g.add(rbox(0.05, 0.004, 0.007, 0.001, lensM, 0, 0.001, 0));
   // センターマーク ▼（白）: 前面・背面はヘッドの下端中央で下（レンズ面）を指す。両側面は細い縦線
   const tri = new THREE.Shape(); tri.moveTo(-0.0035, 0.0145); tri.lineTo(0.0035, 0.0145); tri.lineTo(0, 0.006); tri.closePath();
-  for (const sz of [1, -1]) { const m = new THREE.Mesh(new THREE.ShapeGeometry(tri), white); m.position.z = sz * 0.0097; if (sz < 0) m.rotation.y = Math.PI; g.add(m); }
-  for (const sx of [1, -1]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.0014, 0.008), white); m.position.set(sx * 0.0292, 0.011, 0); m.rotation.y = sx * Math.PI / 2; g.add(m); }
+  for (const sz of [1, -1]) { const m = new THREE.Mesh(new THREE.ShapeGeometry(tri), white); m.position.z = sz * 0.0041; if (sz < 0) m.rotation.y = Math.PI; g.add(m); }
+  for (const sx of [1, -1]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.0014, 0.008), white); m.position.set(sx * 0.0276, 0.011, 0); m.rotation.y = sx * Math.PI / 2; g.add(m); }   // 側面（ベベル込みの外側 x = ±0.0275）に密着
   // 向きのマーク（+x 側）: ヘッド側面の小さな突起 = 画面の F マーク側
-  g.add(rbox(0.003, 0.01, 0.006, 0.001, bodyL, 0.03, 0.03, 0));
+  g.add(rbox(0.004, 0.008, 0.006, 0.001, bodyL, 0.0275, 0.02, 0));           // 側面に半分食い込ませて密着（浮かない）
   // 「10-5」の表示（ヘッド前面の右上）
   const label = new THREE.Mesh(new THREE.PlaneGeometry(0.018, 0.0065), new THREE.MeshBasicMaterial({ map: textTex(256, 92, (c, w, h) => { c.fillStyle = '#24262a'; c.fillRect(0, 0, w, h); c.fillStyle = '#e8e8e8'; c.font = 'bold 60px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('10-5', w / 2 + 10, h / 2); c.beginPath(); c.moveTo(22, 20); c.lineTo(40, 20); c.lineTo(31, 70); c.closePath(); c.fill(); }) }));
-  label.position.set(0.012, 0.03, 0.0097); g.add(label);
+  label.position.set(0.012, 0.03, 0.0041); g.add(label);
   // 前面の造形（握り前面 z = +0.014）: 親指の縦溝、丸いくぼみ、電源・フリーズボタン、LED、ロゴ、無線マーク
-  g.add(rbox(0.011, 0.03, 0.004, 0.003, bodyL, 0, 0.082, 0.0125));
-  g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.002, 20), bodyL).rotateX(Math.PI / 2).translateY(0.0135).translateZ(-0.104));
+  g.add(rbox(0.011, 0.03, 0.004, 0.003, bodyL, 0, 0.082, 0.0065));
+  g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.002, 20), bodyL).rotateX(Math.PI / 2).translateY(0.0075).translateZ(-0.104));
   const icon = (txt, y) => {
-    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.002, 20), bodyL); btn.rotation.x = Math.PI / 2; btn.position.set(0, y, 0.0145); g.add(btn);
+    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.002, 20), bodyL); btn.rotation.x = Math.PI / 2; btn.position.set(0, y, 0.0075); g.add(btn);
+    if (txt === '⏯') g.userData.freezeBtn = btn;   // フリーズ／解除のボタン（指で押せる物理ボタンとして app 側で登録）
     const ic = new THREE.Mesh(new THREE.PlaneGeometry(0.006, 0.006), new THREE.MeshBasicMaterial({ map: textTex(64, 64, (c, w, h) => { c.fillStyle = '#3a3d43'; c.fillRect(0, 0, w, h); c.fillStyle = '#e8e8e8'; c.font = 'bold 40px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, w / 2, h / 2 + 2); }) }));
-    ic.position.set(0, y, 0.0156); g.add(ic);
+    ic.position.set(0, y, 0.0086); g.add(ic);
   };
   icon('⏻', 0.117); icon('⏯', 0.129);
-  for (let i = 0; i < 3; i++) g.add(new THREE.Mesh(new THREE.CircleGeometry(0.0007, 8), new THREE.MeshBasicMaterial({ color: i === 0 ? 0x3ad17a : 0x6a6e75 })).translateX(-0.004 + i * 0.003).translateY(0.1385).translateZ(0.0142));
-  g.add(new THREE.Mesh(new THREE.PlaneGeometry(0.0035, 0.0018), new THREE.MeshBasicMaterial({ color: 0xbfc3c8 })).translateX(0.006).translateY(0.1385).translateZ(0.0142));   // 電池マーク
+  for (let i = 0; i < 3; i++) g.add(new THREE.Mesh(new THREE.CircleGeometry(0.0007, 8), new THREE.MeshBasicMaterial({ color: i === 0 ? 0x3ad17a : 0x6a6e75 })).translateX(-0.004 + i * 0.003).translateY(0.1385).translateZ(0.0072));
+  g.add(new THREE.Mesh(new THREE.PlaneGeometry(0.0035, 0.0018), new THREE.MeshBasicMaterial({ color: 0xbfc3c8 })).translateX(0.006).translateY(0.1385).translateZ(0.0072));   // 電池マーク
   const logo = new THREE.Mesh(new THREE.PlaneGeometry(0.022, 0.0042), new THREE.MeshBasicMaterial({ map: textTex(256, 50, (c, w, h) => { c.fillStyle = '#24262a'; c.fillRect(0, 0, w, h); c.fillStyle = '#d8dbe0'; c.font = 'bold 36px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('FUJIFILM', w / 2, h / 2); }) }));
-  logo.position.set(0, 0.147, 0.0142); g.add(logo);
+  logo.position.set(0, 0.147, 0.0072); g.add(logo);
   const wifi = new THREE.Mesh(new THREE.PlaneGeometry(0.008, 0.005), new THREE.MeshBasicMaterial({ map: textTex(96, 60, (c, w, h) => { c.fillStyle = '#24262a'; c.fillRect(0, 0, w, h); c.fillStyle = '#d8dbe0'; c.font = 'bold 34px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('T·))', w / 2, h / 2); }) }));
-  wifi.position.set(0, 0.156, 0.0142); g.add(wifi);
+  wifi.position.set(0, 0.156, 0.0072); g.add(wifi);
   return g;
 }
 // プローブ立てとゼリー
@@ -136,6 +137,13 @@ void beamSeg(vec3 F, vec3 D, vec3 a, vec3 b, out float s, out float lat){
   float den = A * Cc - B * B; float t = (den > 1e-9) ? clamp((Cc * Dd - B * E) / den, 0.0, 1.0) : 0.0;
   s = dot(a + ab * t - F, D); vec3 q = a + ab * t; lat = length((q - F) - D * s);
 }
+// 針用: 線分パラメータ t をクランプせずに返す（t > 1 は針先より先 = 何も描かない。先端を丸く閉じない）
+void beamSegT(vec3 F, vec3 D, vec3 a, vec3 b, out float s, out float lat, out float t){
+  vec3 ab = b - a, w = F - a; float A = dot(ab, ab), B = dot(ab, D), Dd = dot(ab, w), E = dot(D, w);
+  float den = A - B * B; t = (den > 1e-9) ? (Dd - B * E) / den : 0.0;
+  float tc = clamp(t, 0.0, 1.0);
+  s = dot(a + ab * tc - F, D); vec3 q = a + ab * tc; lat = length((q - F) - D * s);
+}
 // 腕の軸までの距離と局所半径（前腕/上腕）。半径は constants.js の forearmRadius / armAt と同じ式
 float armDepth(vec3 p, out vec3 axisPt, out float rr){
   int k = (p.x >= uElbowX) ? 0 : 1;
@@ -170,7 +178,8 @@ void main(){
   float press = pin / ${PRESS_MAX};             // 圧迫の強さ 0..1
   // --- 組織の圧縮: 押し込んでも皮膚はレンズ面に密着したまま（画像の上端が切れない）。浅い組織ほど詰まり、深部は動かない
   //     画像の深さ d に映る組織 = 元の深さ d + pin·(1 - e^{-d/12mm})。ワールド座標ではレンズ面から d - pin·e^{-d/12mm}
-  vec3 Pt = F + uD * (d - pin * exp(-d / 0.012));
+  float dTrue = d - pin * exp(-d / 0.012);   // この画素に映る組織の真の深さ（押し込みで浅い組織が詰まる）
+  vec3 Pt = F + uD * dTrue;
   // --- 組織（皮膚からの深さ s）
   float s = armDepth(Pt, ax, rr);
   float b = 0.0;
@@ -216,7 +225,7 @@ void main(){
     float rEff = r;
     if (kind > 0.5 && kind < 1.5) rEff *= 1.0 + 0.1 * uPulse;                   // 動脈の拍動
     vec3 v = Pt - q; float vd = dot(v, uD); vec3 vl = v - uD * vd;
-    float comp = (kind < 0.5) ? (1.0 - 0.85 * smoothstep(0.35, 1.0, press) * (1.0 - 0.75 * uTurgor)) : 1.0;   // 静脈の圧迫（軽い接触ではつぶれず、強く押すほど扁平化。駆血で怒張しているとほぼつぶれない）
+    float comp = (kind < 0.5) ? (1.0 - 0.7 * smoothstep(0.5, 1.0, press) * (1.0 - 0.85 * uTurgor)) : 1.0;   // 静脈の圧迫（軽い接触ではつぶれず、強く押すほど扁平化。駆血で怒張しているとほぼつぶれない）
     float de = sqrt(dot(vl, vl) + (vd / comp) * (vd / comp));
     float sd = de - rEff;
     if (sd < sdMin) { sdMin = sd; kMin = kind; specMin = abs(vd) / max(de, 1e-6); }
@@ -242,27 +251,33 @@ void main(){
   // --- 針: 金属は高輝度の本体（短軸では点、長軸では細い線）と、その真下に伸びる針の幅の黒い音響陰影（深くなるにつれ徐々に薄れる）。
   //     多重反射はごく弱く針のすぐ後ろだけ。プラスチックの外筒（半径を負で渡す）は前壁・後壁が 2 本の線（短軸では輪）として
   //     金属より暗く映り、内腔は暗く、陰影はごく弱い。ビームと直交するほど明瞭で、急角度では弱い
+  //     先端: 金属針は刃面（ベベル、約 2.5mm）で先細りに尖る。プラスチック外筒は先端が開いていて（丸く閉じない）、先端 1.5mm だけ少しすぼまる。
+  //     スライス厚（ビームの厚み）は約 ±2.5mm あるので、走査面に完全に入る少し前から針が映り始める
   float nb = 0.0, nshadow = 1.0, nlumen = 1.0;
   for (int i = 0; i < 4; i++) {
     float inten = uNdlA[i].w; if (inten <= 0.0) continue;
     vec3 a = uNdlA[i].xyz, bb = uNdlB[i].xyz; float rw = uNdlB[i].w; bool hollow = rw < 0.0; float r = abs(rw);
-    float sn, ln; beamSeg(F, uD, a, bb, sn, ln);
-    float lw = r * 1.3 + 0.0005;                                                 // スライス厚（横方向に見える幅）
+    float sn, ln, tn; beamSegT(F, uD, a, bb, sn, ln, tn);
+    float L = length(bb - a);
+    if (tn > 1.0 || tn < 0.0) continue;                                          // 針の先より先（ハブより手前）には何もない = 先端は閉じない
+    float lw = r * 1.3 + 0.0015;                                                 // スライス厚（横方向に見える幅: 半幅 約 2.5mm）
     if (ln > lw + r) continue;
     vec3 nd = normalize(bb - a);
     float ang = 1.0 - abs(dot(nd, uD));                                          // 1 = 直交
     float vis = inten * clamp((ang - 0.2) / 0.5, 0.3, 1.0);
     float latW = 1.0 - smoothstep(r * 0.8, lw, ln);                              // 横方向の重み（針の真下ほど強い）
-    float dz = d - sn;
-    float dist = length(vec2(ln, dz));
+    float dz = dTrue - sn;   // 針も組織と一緒に圧縮方向へ動いて見える（血管だけつぶれて針が外に出たように見えない）
+    float toTip = (1.0 - tn) * L;                                                // 針先までの距離
+    float rEff = hollow ? r * (0.6 + 0.4 * clamp(toTip / 0.0015, 0.0, 1.0)) : r * clamp(toTip / 0.0025, 0.08, 1.0);   // 先細り（金属: ベベル、外筒: わずか）
+    float dist = length(vec2(min(ln, lw), dz));
     if (hollow) {
-      float wall = 1.0 - smoothstep(0.00022, 0.00045, abs(dist - r));
-      if (wall > 0.0) nb = max(nb, 0.8 * vis * wall * (0.85 + 0.15 * hash(vec3(u * 2500.0, d * 2500.0, 2.0))));
-      else if (dist < r) nlumen = min(nlumen, 0.2);
+      float wall = 1.0 - smoothstep(0.00022, 0.00045, abs(dist - rEff));
+      if (wall > 0.0) nb = max(nb, 0.8 * vis * wall * latW * (0.85 + 0.15 * hash(vec3(u * 2500.0, d * 2500.0, 2.0))));
+      else if (dist < rEff) nlumen = min(nlumen, 0.2);
       if (dz > r && ln < r) nshadow = min(nshadow, 1.0 - 0.22 * vis * exp(-(dz - r) / 0.02));
     } else {
-      float core = 1.0 - smoothstep(r * 0.5, r * 0.95, dist);
-      if (core > 0.0) nb = max(nb, 1.6 * vis * core * (0.9 + 0.1 * hash(vec3(u * 3000.0, d * 3000.0, 1.0))));
+      float core = 1.0 - smoothstep(rEff * 0.5, rEff * 0.95 + 0.00005, dist);
+      if (core > 0.0) nb = max(nb, 1.6 * vis * core * max(latW, 0.35) * (0.9 + 0.1 * hash(vec3(u * 3000.0, d * 3000.0, 1.0))));
       else if (dz > 0.0 && latW > 0.0) {
         nshadow = min(nshadow, 1.0 - 0.92 * vis * latW * exp(-dz / 0.05));     // 音響陰影（黒い帯）
         float period = max(2.0 * r, 0.0009);
@@ -275,8 +290,8 @@ void main(){
   // --- スペックル（軸方向に細かく、横方向に粗い。2 オクターブ）とゲイン
   vec2 sc = vec2(dot(Pt, uX) / 0.0009, dot(Pt, uD) / 0.00032);
   float spk = 0.65 * vnoise(vec3(sc, uTime * 0.7)) + 0.35 * vnoise(vec3(sc * 2.3, uTime * 0.9 + 3.0));
-  spk = 0.42 + 1.2 * spk * spk;
-  spk *= 0.82 + 0.36 * hash(floor(vec3(sc * 2.2, floor(uTime * 12.0))));         // 細かい粒状
+  spk = 0.36 + 1.3 * spk * spk;
+  spk *= 0.74 + 0.52 * hash(floor(vec3(sc * 2.2, floor(uTime * 12.0))));         // 細かい粒状（やや強め）
   if (nb > 0.3) spk = mix(spk, 1.0, 0.7);
   b *= spk * gapW;
   b *= 1.0 - 0.15 * pow(abs(vUv.x - 0.5) * 2.0, 4.0);                           // 画像端はわずかに暗い
@@ -290,7 +305,7 @@ void main(){
 export function createEcho(renderer, T) {
   const api = {};
   // ---- レンダーターゲットと走査面シェーダー
-  const RT_W = 512, RT_H = Math.round(512 * IMG_DEPTH / PROBE_W);
+  const RT_W = 320, RT_H = Math.round(320 * IMG_DEPTH / PROBE_W);   // 低めの解像度 + 線形補間で少しぼけた実機らしい画質
   const rt = new THREE.WebGLRenderTarget(RT_W, RT_H, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
   rt.texture.colorSpace = THREE.SRGBColorSpace;
   const z4 = n => Array.from({ length: n }, () => new THREE.Vector4());
@@ -351,8 +366,9 @@ export function createEcho(renderer, T) {
     c.fillStyle = '#e8eaed'; c.font = 'bold 26px sans-serif'; c.fillText('L', 62, 117);
     c.fillStyle = '#39c46a'; c.fillRect(140, 90, 90, 54); c.fillStyle = '#0d2b18'; c.font = 'bold 20px sans-serif'; c.fillText('PV穿刺', 152, 117);
     c.strokeStyle = state.frozen ? '#39c46a' : '#8fe3b0'; c.lineWidth = 5; c.beginPath(); c.arc(129, 300, 62, 0, Math.PI * 2); c.stroke();
-    c.fillStyle = state.frozen ? '#39c46a' : '#e8eaed'; c.fillRect(110, 286, 10, 28); c.fillRect(138, 286, 10, 28);
-    c.fillStyle = '#9aa0a8'; c.font = '20px sans-serif'; c.fillText(state.frozen ? 'FROZEN' : 'Freeze', 98, 395);
+    if (state.frozen) { c.fillStyle = '#39c46a'; c.fillRect(110, 286, 10, 28); c.fillRect(138, 286, 10, 28); }                 // フリーズ中: 一時停止マーク
+    else { c.fillStyle = '#e8eaed'; c.beginPath(); c.moveTo(116, 284); c.lineTo(148, 300); c.lineTo(116, 316); c.closePath(); c.fill(); }   // 動作中: 再生マーク（右向きの三角）
+    c.fillStyle = state.frozen ? '#39c46a' : '#9aa0a8'; c.font = state.frozen ? 'bold 20px sans-serif' : '20px sans-serif'; c.fillText(state.frozen ? 'Freeze' : 'Live', state.frozen ? 100 : 112, 395);
     c.fillStyle = '#e8eaed'; c.font = '22px sans-serif'; c.fillText('⌖ Depth to center', 28, 560);
     c.font = 'bold 32px sans-serif'; c.textAlign = 'right'; c.fillText(state.centerVein ? `${state.depthMm.toFixed(1)} mm` : '--', 230, 600);
     c.textAlign = 'left'; c.font = '22px sans-serif'; c.fillText('⊖ Diameter', 28, 650);
@@ -374,6 +390,7 @@ export function createEcho(renderer, T) {
   let uiTimer = 0;
   function drawOverlay() {
     const c = ovc; c.clearRect(0, 0, ov.width, ov.height);
+    if (state.active && state.frozen) { c.fillStyle = 'rgba(57,196,106,0.85)'; c.fillRect(ov.width - 170, 12, 158, 40); c.fillStyle = '#062a16'; c.font = 'bold 26px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('FREEZE', ov.width - 91, 32); }
     if (!state.active || !state.contact || !state.centerVein) { ovTex.needsUpdate = true; return; }
     const v = state.centerVein;
     const px = (0.5 + v.lateral / PROBE_W) * ov.width, py = (v.depthCenter / IMG_DEPTH) * ov.height;
@@ -411,8 +428,11 @@ export function createEcho(renderer, T) {
 
   // ---- 毎フレーム: プローブ姿勢から画像を生成し、センターライン上の血管を計測
   const _f = new THREE.Vector3(), _q = new THREE.Vector3(), _ab = new THREE.Vector3(), _w = new THREE.Vector3();
-  api.update = (probeObj, dt, pulse, t) => {
+  let ovTimer = 0, lastKey = '';
+  // render=false のフレームは画像を生成しない（接触判定・計測だけ更新）。呼び出し側で 1 フレームおきにして GPU 負荷を半分にする
+  api.update = (probeObj, dt, pulse, t, render = true) => {
     if (!state.active) return state;
+    if (state.frozen) return state;   // フリーズ中: 画像・計測・接触判定をそのまま保つ（画面は静止）
     probeObj.updateMatrixWorld(true);
     const O = probeObj.getWorldPosition(uniforms.uO.value);
     const qw = probeObj.getWorldQuaternion(new THREE.Quaternion());
@@ -438,20 +458,32 @@ export function createEcho(renderer, T) {
         const sdep = _q.clone().sub(O).dot(D); _f.copy(_q).sub(O).addScaledVector(D, -sdep);
         const lat = _f.length();
         const r = s.rA + (s.rB - s.rA) * tt;
-        if (lat < r + 0.004 && sdep > 0 && sdep < IMG_DEPTH && (!best || lat < best.latAbs)) best = { lat: lat * Math.sign(_f.dot(X)), latAbs: lat, depthCenter: sdep, r, kind: s.kind };
+        if (!(lat < r + 0.004 && sdep > 0 && sdep < IMG_DEPTH)) continue;
+        // センターライン上（横ずれ 2.5mm 以内）に複数あれば最も浅い血管（穿刺対象の表在血管。その下の動脈・伴走静脈ではない）、なければ最も中央に近いもの
+        const onLine = lat < 0.0025, bestOn = best && best.latAbs < 0.0025;
+        const better = !best || (onLine && bestOn ? sdep < best.depthCenter : onLine && !bestOn ? true : !onLine && bestOn ? false : lat < best.latAbs);
+        if (better) best = { lat: lat * Math.sign(_f.dot(X)), latAbs: lat, depthCenter: sdep, r, kind: s.kind };
       }
       if (best) { state.centerVein = best; state.depthMm = (best.depthCenter - Math.max(0, t0)) * 1000; state.diaMm = best.r * 2000; }
     }
     // 画像生成（オフスクリーン描画）。XR 中は XR を一時的に無効にし、描画先（XR のフレームバッファ）を必ず元に戻す
-    const xr = renderer.xr.enabled, prevTarget = renderer.getRenderTarget(), prevAutoClear = renderer.autoClear;
-    renderer.xr.enabled = false; renderer.autoClear = true;
-    renderer.setRenderTarget(rt); renderer.render(quadScene, quadCam);
-    renderer.setRenderTarget(prevTarget); renderer.autoClear = prevAutoClear; renderer.xr.enabled = xr;
-    uiTimer += dt;
-    if (uiTimer > 0.25) { uiTimer = 0; drawUI(); drawOverlay(); }
+    if (render) {
+      const xr = renderer.xr.enabled, prevTarget = renderer.getRenderTarget(), prevAutoClear = renderer.autoClear;
+      renderer.xr.enabled = false; renderer.autoClear = true;
+      renderer.setRenderTarget(rt); renderer.render(quadScene, quadCam);
+      renderer.setRenderTarget(prevTarget); renderer.autoClear = prevAutoClear; renderer.xr.enabled = xr;
+    }
+    uiTimer += dt; ovTimer += dt;
+    // 計測値が変わったら（血管が中央に入った/外れた、深さ・径の変化）すぐ描き直し、それ以外は画面の枠は 1 秒ごと・オーバーレイは 10 回/秒（キャンバス転送を減らす）
+    const key = state.centerVein ? `${state.depthMm.toFixed(1)}/${state.diaMm.toFixed(1)}/${state.centerVein.kind}` : '';
+    const changed = key !== lastKey; lastKey = key;
+    if (changed || uiTimer > 1.0) { uiTimer = 0; drawUI(); }
+    if (changed || ovTimer > 0.1) { ovTimer = 0; drawOverlay(); }
     return state;
   };
-  api.setActive = on => { state.active = on; if (!on) { state.contact = false; state.centerVein = null; drawOverlay(); drawUI(); } };
+  api.setActive = on => { state.active = on; if (!on) { state.contact = false; state.centerVein = null; state.frozen = false; drawOverlay(); drawUI(); } };
+  // フリーズ（画像を静止）／解除。プローブを持つ手のグリップ、またはプローブの ⏯ ボタンを指で押す
+  api.toggleFreeze = () => { if (!state.active) return false; state.frozen = !state.frozen; drawUI(); drawOverlay(); return state.frozen; };
   api.state = state;
   api.PROBE_W = PROBE_W; api.IMG_DEPTH = IMG_DEPTH;
   return api;
