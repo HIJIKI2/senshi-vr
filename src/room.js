@@ -253,7 +253,7 @@ function buildMachine(T, steel, chrome) {
   const gray = std(0xaab1b9, { roughness: 0.5 });
   const dark = std(0x24272c, { roughness: 0.5 });
   const cover = std(0x8d82e8, { transparent: true, opacity: 0.42, roughness: 0.08 });   // 紫がかった透明カバー
-  const clear = std(0xf4f7fa, { transparent: true, opacity: 0.35, roughness: 0.1 });
+  const clear = std(0xf4f7fa, { transparent: true, opacity: 0.35, roughness: 0.1, depthWrite: false });   // 中の液を隠さない（描画順が変わっても液が消えない）
   const metal = std(0xc9cfd6, { metalness: 0.85, roughness: 0.3 });
   const red = std(0xd9303a, { roughness: 0.4 }), blue = std(0x2f6fd0, { roughness: 0.4 });
   const hoseM = std(0xf2f2ee, { roughness: 0.5 });
@@ -445,7 +445,7 @@ function buildMachine(T, steel, chrome) {
     g.add(cyl(0.012, 0.012, y1 - y0, clear, x, yc, CZ, 16));
     const h = (y1 - y0) * LEVEL;
     const liquid = cyl(0.0112, 0.0112, h, std(0xe3ebf1, { transparent: true, opacity: 0.55, roughness: 0.3 }), x, y0 + h / 2, CZ, 16);   // 液面まで液（生食 → 血液）
-    liquid.castShadow = false; liquid.userData.dynamic = true; g.add(liquid);   // 色が個別に変わる（生食 → 血液）ので静的結合しない（結合すると 2 つのチャンバーが 1 つの材質を共有して同時に赤くなる）
+    liquid.castShadow = false; liquid.userData.dynamic = true; liquid.renderOrder = -1; g.add(liquid);   // 透明な筒より先に描く   // 色が個別に変わる（生食 → 血液）ので静的結合しない（結合すると 2 つのチャンバーが 1 つの材質を共有して同時に赤くなる）
     g.add(cyl(0.013, 0.013, 0.012, capM, x, y1 + 0.004, CZ, 12));                                               // 上キャップ（入口）
     g.add(cyl(0.004, 0.004, 0.014, whiteSoft, x + (holder ? 0.012 : -0.012), y1 - 0.006, CZ, 8).rotateZ(Math.PI / 2));   // 圧モニターラインのポート（外側）
     g.add(cyl(0.008, 0.008, 0.008, capM, x, y0 - 0.002, CZ, 12));                                                // 下端（出口）

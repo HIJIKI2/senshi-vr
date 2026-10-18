@@ -117,7 +117,15 @@ export function buildPatient(scene, T, vesselType = 'avf', vesselOpts = {}) {
     const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 256;
     const ctx = canvas.getContext('2d'); ctx.clearRect(0, 0, 1024, 256);
     const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = THREE.RepeatWrapping;
-    const m = limb(start, end, profile.map(([t, r]) => [t, r + 0.0005]), new THREE.MeshPhysicalMaterial({ map: tex, transparent: true, roughness: 0.12, clearcoat: 0.8, clearcoatRoughness: 0.15, depthWrite: false }), segs);
+    tex.flipY = false;   // canvas の y = v（既定の flipY=true だと印が腕の長さ方向に鏡像の位置へ出て、拭いた所と色の付く所がずれる）
+    // 断面の並びを等間隔に取り直す: LatheGeometry の v は頂点の番号で決まるので、profile の t が等間隔でないと v = y/L の位置と印の位置がずれる（上腕で 2〜3cm ずれていた）
+    const N = 16, uni = [];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N; let r = profile[profile.length - 1][1];
+      for (let k = 0; k < profile.length - 1; k++) { const [t0, r0] = profile[k], [t1, r1] = profile[k + 1]; if (t >= t0 && t <= t1) { r = r0 + (r1 - r0) * (t - t0) / (t1 - t0); break; } }
+      uni.push([t, r + 0.0005]);
+    }
+    const m = limb(start, end, uni, new THREE.MeshPhysicalMaterial({ map: tex, transparent: true, roughness: 0.12, clearcoat: 0.8, clearcoatRoughness: 0.15, depthWrite: false }), segs);
     m.castShadow = false; m.receiveShadow = false; m.renderOrder = 3;
     if (parent === forearm) inF(m); else inA(m);
     const L = end.distanceTo(start);
@@ -177,7 +185,7 @@ export function buildPatient(scene, T, vesselType = 'avf', vesselOpts = {}) {
   inF(scar);
 
   // ---------- 血管（AVF / AVG 切り替え可。AVF は深い血管モードあり）
-  const api = { group, armRoot, forearm, S, E, vessel: null, ready, hand, lift: 0, wrist: W.clone(), markSwab: api_markSwab, isDisinfected: api_isDisinfected, clearDisinfect: api_clearDisinfect };
+  const api = { group, armRoot, forearm, S, E, W, overlayUV, markSwab: api_markSwab, vessel: null, ready, hand, lift: 0, wrist: W.clone(), isDisinfected: api_isDisinfected, clearDisinfect: api_clearDisinfect };
   // 腕の姿勢（rad）: abduct = 肩を支点に腕全体を外（ユーザー側 +z）へ広げる、yaw = 肘を支点に前腕を外へ振る、lift = 前腕を持ち上げる、
   // roll = 前腕の回内（0 = 掌が上の回外位。正で母指側が上を向き、橈側皮静脈が腕の上面へ来る）
   api.pose = { abduct: 0, yaw: 0, lift: 0, roll: 0 };

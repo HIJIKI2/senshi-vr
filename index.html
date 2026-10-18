@@ -30,7 +30,7 @@
 </div>
 <script type="module" src="./app.js"></script>
 <script>
-  if ('serviceWorker' in navigator) {
+  if ('serviceWorker' in navigator && !location.search.includes('nosw=1')) {   // nosw=1: デバッグ描画用（Service Worker を登録しない）
     window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
   }
 </script>

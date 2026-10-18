@@ -58,7 +58,7 @@ const MAX_LIFT = 0.42;   // 前腕の持ち上げ上限（rad ≈ 24°）
 const ARM_LIMITS = { abduct: [-0.08, 0.75], yaw: [-0.3, 0.32], lift: [0, MAX_LIFT], roll: [-0.25, 1.6] };
 
 // ---------------------------------------------------------------- 設定（血管タイプ・針タイプ）と手順
-const config = { vessel: 'avf', needle: 'metal', deep: false };   // deep: 深い血管（透けて見えない。エコー下穿刺の練習）
+const config = { vessel: 'avf', needle: 'metal', deep: false, voice: !location.search.includes('voice=0') };   // deep: 深い血管（透けて見えない。エコー下穿刺の練習）, voice: 手順の音声ガイド
 {
   const qs = new URLSearchParams(location.search);
   if (C.VESSEL_TYPES[qs.get('vessel')]) config.vessel = qs.get('vessel');
@@ -92,7 +92,7 @@ function buildSteps() {
     { id: 'hygiene',    label: '手指衛生（速乾性手指消毒薬）', hint: '右のカートの端（ベッドから遠い側の開始セット）にある手指消毒薬のポンプヘッドを、手（掌や指先）で押し込みます（標準予防策）。' },
     { id: 'gloves',     label: '手袋を装着（両手）', hint: '開始セットの手袋の箱から手袋を引き出し（トリガーで持つ）、反対の手に近づけるとその手に装着されます。もう一方の手も同様に。', requires: ['hygiene'] },
     { id: 'auscult',    label: avg ? '聴診器でグラフト音を聴取' : '聴診器でシャント音を聴取', hint: 'カートの聴診器（チェストピース）をトリガーで持ち（持ったまま。離すときはもう一度トリガー）、垂れ下がったイヤーチップを自分の頭に近づけて装着し、ダイアフラムを前腕の血管に当てて 3 秒間聴診します。' + (avg ? '' : '手首側（吻合部）ほど音が大きくなります。'), requires: ['gloves'] },
-    { id: 'palpate',    label: avg ? 'グラフトを触知（スリル・走行確認）' : 'シャント血管を触知（スリル）', hint: '何も持っていない手でトリガーかグリップを引いて人差し指を立て、指先を前腕の血管の真上の皮膚に当てます。この手順の間は、トリガーもグリップも握らない開いた手で前腕に触れるだけで拍動（スリル）が伝わります（血管から 1.5cm 以内）。1 秒確認します。この手順を終えると、トリガーかグリップで人差し指を立てた指先の真下に血管の内腔があるときだけ伝わるようになります（感じた所の真下へ垂直に刺せば血管に入る）。', requires: ['gloves'] },
+    { id: 'palpate',    label: avg ? 'グラフトを触知（スリル・走行確認）' : 'シャント血管を触知（スリル）', say: '何も持っていない手で人差し指を立て、指先を前腕の血管の真上の皮膚に当て、1 秒確認します。', hint: '何も持っていない手でトリガーかグリップを引いて人差し指を立て、指先を前腕の血管の真上の皮膚に当てます。この手順の間は、トリガーもグリップも握らない開いた手で前腕に触れるだけで拍動（スリル）が伝わります（血管から 1.5cm 以内）。1 秒確認します。この手順を終えると、トリガーかグリップで人差し指を立てた指先の真下に血管の内腔があるときだけ伝わるようになります（感じた所の真下へ垂直に刺せば血管に入る）。', requires: ['gloves'] },
     { id: 'open',       label: '穿刺セットを開封',           hint: '穿刺セットの箱に手を近づけてトリガーを引くと蓋が開きます。' },
     { id: 'sheet',      label: '滅菌シーツを腕の下に敷く',   hint: 'セット内の滅菌シーツ（緑）を持ち、患者の前腕の上で手を離すと腕の下に敷かれます。反対の手で患者の手首を持つ（トリガー）と前腕を持ち上げられるので、持ち上げて敷くとスムーズです。', requires: ['open'] },
     { id: 'disinfect',  label: '穿刺部をアルコール綿で消毒', hint: '開始セットのアルコール綿のパウチを持ち、反対の手で開封口に触れてトリガーを引くと破れます。もう一度トリガーで中の綿を取り出し、穿刺予定部位を中心に外側へ円を描くように（直径 5〜7cm）消毒します。乾燥を待ってから穿刺。', requires: ['sheet'] },
@@ -110,6 +110,16 @@ function buildSteps() {
   ];
 }
 // （STEPS は init() で患者・血管を作ってから buildSteps() で生成する）
+// 読み上げ文の書き出し（?dump=voice）: 血管 × 針 × 深さ の全設定で手順を作り、重複を除いた「次は、…」の文を console に出す
+function dumpVoiceTexts() {
+  const saved = { ...config }, seen = new Set();
+  for (const vessel of ['avf', 'avg']) for (const needle of ['metal', 'cannula']) for (const deep of [false, true]) {
+    Object.assign(config, { vessel, needle, deep }); P.setVesselType(vessel, { deep }); buildSteps();
+    for (const s of STEPS) { const t = speechText(stepSpeech(s)); if (!seen.has(t)) { seen.add(t); console.log('[voicedump] ' + JSON.stringify({ id: s.id, text: t })); } }
+  }
+  Object.assign(config, saved); P.setVesselType(config.vessel, { deep: config.deep }); buildSteps();
+  console.log(`[voicedump] done ${seen.size}`);
+}
 
 // ---------------------------------------------------------------- タイトル画面（白い部屋にロゴ・設定パネル・スタート）
 // 起動時と VR 開始時はタイトル画面。スタートを押すと透析室が現れ、設定どおりに最初から開始する。確認用パラメータ（test/debug/demo/cam など）があるときは最初から透析室
@@ -140,7 +150,7 @@ function completeStep(id) {
   if (idx < 0 || state.done[id]) return;
   const missing = (STEPS[idx].requires || []).filter(r => STEPS.some(s => s.id === r) && !state.done[r]);
   state.done[id] = true;
-  if (missing.length) { state.score -= 5; addLog(`手順の順番が違います（先に「${STEPS.find(s => s.id === missing[0]).label}」）−5`, 'warn'); }
+  if (missing.length) deduct(2, `手順の順番が違います（先に「${STEPS.find(s => s.id === missing[0]).label}」）`, 'warn');
   addLog(`✔ ${STEPS[idx].label}`, 'ok');
   cue('ok');
   checkFinished();
@@ -149,10 +159,23 @@ function completeStep(id) {
 function checkFinished() {
   if (!state.finished && state.flowDone && !state.vLeak && STEPS.every(s => state.done[s.id])) {
     state.finished = true; state.score = Math.max(0, state.score);
-    addLog(`トレーニング終了  スコア ${state.score} 点`, 'ok');
+    const rank = scoreRank(state.score);
+    addLog(`トレーニング終了  スコア ${state.score} 点（${rank}）`, 'ok');
+    speak(`トレーニング終了。スコアは ${state.score} 点、${rank} です。`, true);
   }
 }
-const penalty = (pts, msg) => { state.score -= pts; addLog(`${msg} −${pts}`, 'bad'); cue('bad'); };
+const scoreRank = s => s >= 90 ? '優' : s >= 70 ? '良' : s >= 50 ? '可' : '要再挑戦';
+// 採点: 減点は元の基準の半分（初めてでも 50 点前後は残り、慣れれば 90 点以上を狙える）。同じ内容の減点を繰り返したときはさらに半分（最低 1 点）
+const SCORE_SCALE = 0.5;
+function deduct(pts, msg, kind = 'bad') {
+  const key = msg.replace(/[0-9.]+/g, '#');
+  state.penalized ??= {};
+  const n = state.penalized[key] = (state.penalized[key] || 0) + 1;
+  const d = Math.max(1, Math.round(n > 1 ? pts / 2 : pts));
+  state.score -= d; addLog(`${msg} −${d}`, kind); if (kind === 'bad') cue('bad');
+  speak(`減点。${msg}`, true);
+}
+const penalty = (pts, msg) => deduct(Math.max(1, Math.round(pts * SCORE_SCALE)), msg, 'bad');
 
 // ---------------------------------------------------------------- セットアップ
 let renderer, scene, camera, dolly, clock, orbit, uiDirty = true, T, P, room, setBox, settings, gloveMat, skinMat, steth, gloveBox, echo;
@@ -218,7 +241,7 @@ function init() {
   updateSettingLabels();
   buildIntro();
   buildTitle();
-  { const q = new URLSearchParams(location.search); const debugging = ['test', 'debug', 'demo', 'cam', 'pose', 'place', 'lift', 'stats'].some(k => q.has(k)); if (q.get('title') === '1' || !debugging) returnToTitle(true); }   // 起動時も赤いボタンと同じ経路でタイトルへ（位置・見た目を同じにする）
+  { const q = new URLSearchParams(location.search); const debugging = ['test', 'debug', 'demo', 'cam', 'pose', 'place', 'lift', 'stats', 'dump'].some(k => q.has(k)); if (q.get('title') === '1' || !debugging) returnToTitle(true); }   // 起動時も赤いボタンと同じ経路でタイトルへ（位置・見た目を同じにする）
 
   const qs = new URLSearchParams(location.search);
   if (qs.get('cam')) {
@@ -309,6 +332,17 @@ function init() {
   if (qs.get('demo')) setTimeout(demoState, 500);
   if (qs.get('debug') === 'echo') setTimeout(() => debugEcho(qs), 600);   // プローブを腕に当てた状態（axis=short|long, needle=1）
   if (qs.get('test') === 'grab') setTimeout(selfTestGrab, 800);
+  if (qs.get('dump') === 'voice') setTimeout(dumpVoiceTexts, 800);
+  if (qs.get('debug') === 'swab') setTimeout(() => {   // 消毒痕の位置確認: 綿 2 枚を皮膚に置き、その原点に印を描く（印が綿の真下に出るか）
+    const sv = P.vessel.sites.V;
+    [[0.02, 0], [-0.03, 0.015]].forEach(([dx, dz], i) => {
+      const c = new THREE.Vector3(sv.x + dx, 0, sv.z + dz); c.y = C.skinY(c.x, c.z);
+      const sw = tools['swab' + i]; sw.obj.visible = !qs.get('hide'); scene.attach(sw.obj);   // &hide=1: 綿を隠して印だけ見る sw.obj.position.copy(P.toWorld(c.clone())); sw.obj.quaternion.identity(); sw.obj.updateMatrixWorld(true);
+      P.markSwab(c, 0.013);
+      const { o, u, v } = P.overlayUV(c), L = P.W.distanceTo(P.E), tExp = Math.abs(c.x - P.E.x) / Math.abs(P.W.x - P.E.x);
+      console.log(`[swab] ${i}: u=${u.toFixed(3)} v=${v.toFixed(3)} expected v≈${tExp.toFixed(3)} overlayL=${o.L.toFixed(3)} E.x=${P.E.x.toFixed(3)} W.x=${P.W.x.toFixed(3)} c=${c.x.toFixed(3)},${c.y.toFixed(3)},${c.z.toFixed(3)} disinfected=${P.isDisinfected(c)}`);
+    });
+  }, 600);
   if (qs.get('place') === 'probe') setTimeout(() => { const pr = tools.probe; pr.obj.position.set(0.5, 1.0, -0.95); pr.obj.rotation.set(0.4, 0.7, 0.3); placeProbe(pr); const o2 = tools.tablet; }, 600);   // プローブをベッドの上に置いた状態（確認用）          // 全器具の「掴む」自己テスト（結果はコンソールへ）
   if (qs.get('lift')) P.setLift(Number(qs.get('lift')));   // 前腕の持ち上げ確認（rad）
   if (qs.get('pose')) { const [abduct, yaw, lift, roll] = qs.get('pose').split(',').map(Number); P.setPose({ abduct: abduct || 0, yaw: yaw || 0, lift: lift || 0, roll: roll || 0 }); }   // 腕の姿勢（rad）の確認用
@@ -404,8 +438,8 @@ function buildTools() {
   const slot = gloveBox.localToWorld(gloveBox.userData.slot.clone());
   registerTool('glove', makeGlove(gloveMat), { pos: [slot.x, slot.y + 0.02, slot.z], rotY: 0.4, gripPos: [0, -0.01, -0.05], kind: 'glove', grabR: 0.1 });   // 取り出し口から顔を出したくしゃくしゃの手袋の塊
   const basin = tp(-0.15, -0.42, 0.1);   // 使用済みの綿・パウチは下段の膿盆へ
-  for (let i = 0; i < 2; i++) {
-    registerTool('pouch' + i, makeAlcoholPouch(T), { pos: tp(0.41 + i * 0.065, 0.003, 0.2 - i * 0.004), rotY: yaw + 0.1 * (i - 0.5), gripPos: [0, -0.012, -0.05], gripEuler: [0, Math.PI / 2, 0], kind: 'pouch' });
+  for (let i = 0; i < 4; i++) {   // アルコール綿のパウチ 4 枚（2 枚重ねを 2 山。失敗しても足りるように。横に広げると手指消毒薬と重なる）
+    registerTool('pouch' + i, makeAlcoholPouch(T), { pos: tp(0.41 + (i % 2) * 0.065 + (i >> 1) * 0.004, 0.003 + (i >> 1) * 0.006, 0.2 - (i % 2) * 0.004 + (i >> 1) * 0.008), rotY: yaw + 0.1 * ((i % 2) - 0.5) + (i >> 1) * 0.12, gripPos: [0, -0.012, -0.05], gripEuler: [0, Math.PI / 2, 0], kind: 'pouch' });
     tools['pouch' + i].obj.userData.swab = 'swab' + i;
     registerTool('swab' + i, makeSwab(), { pos: [basin[0] + i * 0.03, basin[1], basin[2]], rotY: yaw, gripPos: [0, -0.012, -0.05], locked: true, kind: 'cotton' });
     tools['swab' + i].obj.visible = false;
@@ -483,6 +517,12 @@ function updateButtons(dt) {
 }
 
 function toggleSetting(name) {
+  if (name === 'voice') {   // 音声ガイドの ON/OFF（物はリセットしない）
+    config.voice = !config.voice; updateSettingLabels();
+    if (config.voice) { voice.stepId = null; speak('音声ガイドをオンにしました。', true); } else { if (voice.ok) speechSynthesis.cancel(); voice.queue.length = 0; if (voice.el) { voice.el.pause(); voice.el = null; } }
+    addLog(`音声ガイド: ${config.voice ? 'ON' : 'OFF'}` + (config.voice ? (useClips() ? '（同梱の音声）' : voice.v ? `（端末の音声: ${voice.v.name}）` : '（この端末に日本語の音声がなく、同梱の音声も読み込めていません）') : ''), 'info');
+    return;
+  }
   if (name === 'vessel') config.vessel = config.vessel === 'avf' ? 'avg' : 'avf';
   else if (name === 'needle') config.needle = config.needle === 'metal' ? 'cannula' : 'metal';
   else config.deep = !config.deep;
@@ -495,23 +535,25 @@ function updateSettingLabels() {
   T.labels.vessel.draw('血管タイプ', config.vessel === 'avf' ? '自己血管\nAVF' : '人工血管\nAVG (U字)');
   T.labels.needle.draw('針タイプ', config.needle === 'metal' ? '金属翼状針' : 'カニューラ型\n留置針');
   T.labels.depth.draw('血管の深さ', config.deep ? '深い\n（エコー下）' : '標準');
+  T.labels.voice.draw('音声ガイド', config.voice ? 'ON' : 'OFF');
 }
 
 // ---------------------------------------------------------------- UI パネル
 let uiCanvas, uiCtx, uiTex;
 function buildUI() {
-  uiCanvas = document.createElement('canvas'); uiCanvas.width = 1024; uiCanvas.height = 760;
+  uiCanvas = document.createElement('canvas'); uiCanvas.width = 1280; uiCanvas.height = 1100;   // 1.28 × 1.1m の板（1px = 1mm）
   uiCtx = uiCanvas.getContext('2d');
   uiTex = new THREE.CanvasTexture(uiCanvas); uiTex.colorSpace = THREE.SRGBColorSpace;
-  const g = new THREE.Group(); g.position.set(-0.3, 1.55, -1.42); g.rotation.y = 0.25;
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.7, 0.03), new THREE.MeshStandardMaterial({ color: 0x24272c, roughness: 0.5 }));
+  // ベッドの頭側の向こう（約 1.45m 先）に立つ大きな板（1.28 × 1.1m、中心の高さ 1.62m）。1.4m 先から読める文字の大きさ（手順 約 3cm、見出し 4cm）
+  const g = new THREE.Group(); g.position.set(-0.3, 1.62, -1.4); g.rotation.y = 0.25;
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.32, 1.14, 0.03), new THREE.MeshStandardMaterial({ color: 0x24272c, roughness: 0.5 }));
   g.add(frame);
-  const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.88, 0.653), new THREE.MeshBasicMaterial({ map: uiTex }));
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.28, 1.1), new THREE.MeshBasicMaterial({ map: uiTex }));
   panel.position.z = 0.016; g.add(panel);
-  const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 1.2, 10), new THREE.MeshStandardMaterial({ color: 0x9aa1a8, metalness: 0.8, roughness: 0.3 }));
-  stand.position.set(0, -0.95, 0); g.add(stand);
+  const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 1.05, 10), new THREE.MeshStandardMaterial({ color: 0x9aa1a8, metalness: 0.8, roughness: 0.3 }));
+  stand.position.set(0, -1.095, 0); g.add(stand);
   const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.02, 24), new THREE.MeshStandardMaterial({ color: 0x5a6068, roughness: 0.5 }));
-  foot.position.set(0, -1.54, 0); g.add(foot);
+  foot.position.set(0, -1.61, 0); g.add(foot);
   scene.add(g);
   drawUI();
 }
@@ -521,45 +563,57 @@ function wrap(ctx, text, maxW) {
   if (line) lines.push(line);
   return lines;
 }
+// 文字列を幅 maxW に収める: 収まらなければ文字を小さく（最小 70%）、それでも収まらなければ末尾を … に
+function fitText(c, text, x, y, maxW) {
+  const m = /(\d+)px/.exec(c.font), size = m ? +m[1] : 20, font0 = c.font;
+  if (c.measureText(text).width > maxW) {
+    c.font = font0.replace(/\d+px/, Math.max(Math.round(size * 0.7), Math.floor(size * maxW / c.measureText(text).width)) + 'px');
+    if (c.measureText(text).width > maxW) { while (text.length > 1 && c.measureText(text + '…').width > maxW) text = text.slice(0, -1); text += '…'; }
+  }
+  c.fillText(text, x, y); c.font = font0;
+}
 function drawUI() {
   const c = uiCtx, W = uiCanvas.width, H = uiCanvas.height;
   c.fillStyle = '#10233a'; c.fillRect(0, 0, W, H);
-  c.fillStyle = '#1b3b5e'; c.fillRect(0, 0, W, 86);
-  c.fillStyle = '#fff'; c.font = 'bold 40px sans-serif'; c.textBaseline = 'middle'; c.textAlign = 'left';
-  c.fillText('透析室 穿刺トレーニング', 28, 36);
-  c.fillStyle = '#9fd3ff'; c.font = '22px sans-serif';
-  c.fillText(`${C.VESSEL_TYPES[config.vessel].label}  /  ${C.NEEDLE_TYPES[config.needle].label}`, 28, 70);
-  c.textAlign = 'right'; c.font = 'bold 40px sans-serif';
+  c.fillStyle = '#1b3b5e'; c.fillRect(0, 0, W, 100);
+  c.fillStyle = '#fff'; c.font = 'bold 44px sans-serif'; c.textBaseline = 'middle'; c.textAlign = 'left';
+  c.fillText('透析室 穿刺トレーニング', 28, 40);
+  c.fillStyle = '#9fd3ff'; c.font = '26px sans-serif';
+  c.fillText(`${C.VESSEL_TYPES[config.vessel].label}  /  ${C.NEEDLE_TYPES[config.needle].label}` + (config.deep ? '  /  深い血管（エコー下）' : '') + (config.voice ? '  /  音声ガイド ON' : ''), 28, 80);
+  c.textAlign = 'right'; c.font = 'bold 52px sans-serif';
   c.fillStyle = state.score >= 80 ? '#7ee8a2' : state.score >= 50 ? '#ffd166' : '#ff7b7b';
-  c.fillText(`スコア ${Math.max(0, state.score)}`, W - 28, 43);
+  c.fillText(`スコア ${Math.max(0, state.score)}`, W - 28, 50);
   c.textAlign = 'left';
   const cur = currentStep();
-  const sp = Math.min(25.5, 432 / STEPS.length);
-  c.font = `${sp < 23 ? 19 : 21}px sans-serif`;
+  // 左: 手順の一覧（1 行 約 3cm。現在の手順は太字・黄色の帯）
+  const LX = 16, LW = 744, sp = Math.min(40, 796 / STEPS.length), fs = Math.round(Math.min(30, sp * 0.76));
   STEPS.forEach((s, i) => {
-    const y = 108 + i * sp, done = !!state.done[s.id], isCur = cur && cur.id === s.id;
-    if (isCur) { c.fillStyle = 'rgba(255,209,102,0.18)'; c.fillRect(16, y - sp / 2, 570, sp); }
+    const y = 118 + i * sp + sp / 2, done = !!state.done[s.id], isCur = cur && cur.id === s.id;
+    if (isCur) { c.fillStyle = 'rgba(255,209,102,0.22)'; c.fillRect(LX, y - sp / 2, LW, sp); }
     c.fillStyle = done ? '#7ee8a2' : isCur ? '#ffd166' : '#9fb3c8';
-    c.fillText(`${done ? '☑' : '☐'} ${i + 1}. ${s.label}`, 28, y);
+    c.font = `${isCur ? 'bold ' : ''}${fs}px sans-serif`;
+    fitText(c, `${done ? '☑' : '☐'} ${i + 1}. ${s.label}`, 28, y, LW - 24);
   });
-  c.fillStyle = '#17304d'; c.fillRect(600, 100, W - 624, 430);
-  c.fillStyle = '#ffd166'; c.font = 'bold 24px sans-serif';
-  wrap(c, state.finished ? '結果' : (cur ? `次: ${cur.label}` : ''), W - 650).forEach((l, i) => c.fillText(l, 616, 126 + i * 28));
-  c.fillStyle = '#e8eef7'; c.font = '21px sans-serif';
-  const hint = state.finished ? `スコア ${Math.max(0, state.score)} 点。B/Y ボタン長押しでリセットして再挑戦、サイドテーブルの赤いボタンでタイトル画面へ戻れます。左のサイドテーブルで血管・針のタイプを切り替えられます。` : (cur ? cur.hint : '');
-  wrap(c, hint, W - 650).forEach((l, i) => c.fillText(l, 616, 188 + i * 27));
+  // 右: 次の手順（大きな見出し）とやり方
+  const RX = 784, RW = W - RX - 16;
+  c.fillStyle = '#17304d'; c.fillRect(RX - 12, 112, RW + 12, 802);
+  c.fillStyle = '#ffd166'; c.font = 'bold 40px sans-serif';
+  let y = 150;
+  wrap(c, state.finished ? `結果: ${scoreRank(state.score)}` : (cur ? `次: ${cur.label}` : ''), RW - 16).forEach(l => { c.fillText(l, RX, y); y += 46; });
+  y += 10; c.fillStyle = '#e8eef7'; c.font = '29px sans-serif';
+  const hint = state.finished ? `スコア ${Math.max(0, state.score)} 点。B/Y ボタン長押しでリセットして再挑戦、サイドテーブルの赤いボタンでタイトル画面へ戻れます。` : (cur ? cur.hint : '');
+  wrap(c, hint, RW - 16).forEach(l => { c.fillText(l, RX, y); y += 36; });
   if (state.info) {
-    c.fillStyle = '#9ad7ff'; c.font = 'bold 23px sans-serif';
-    wrap(c, state.info, W - 650).forEach((l, i) => c.fillText(l, 616, 410 + i * 28));
+    y += 14; c.fillStyle = '#9ad7ff'; c.font = 'bold 30px sans-serif';
+    wrap(c, state.info, RW - 16).forEach(l => { c.fillText(l, RX, y); y += 37; });
   }
-  c.fillStyle = '#0b1a2c'; c.fillRect(16, 548, W - 32, 176);
-  c.font = '21px sans-serif';
-  state.log.slice(-5).forEach((l, i) => {
+  // 下: 直近の記録（4 行）
+  c.fillStyle = '#0b1a2c'; c.fillRect(16, 928, W - 32, 156);
+  c.font = '27px sans-serif';
+  state.log.slice(-4).forEach((l, i) => {
     c.fillStyle = { ok: '#7ee8a2', warn: '#ffd166', bad: '#ff7b7b', info: '#cfe0f0' }[l.kind];
-    c.fillText(l.msg, 32, 572 + i * 33);
+    fitText(c, l.msg, 32, 950 + i * 37, W - 64);
   });
-  c.fillStyle = '#6f8aa6'; c.font = '19px sans-serif';
-  c.fillText(controllers.some(cs => cs.tracked) ? 'ハンドトラッキング: つまむ = 持つ/離す   人差し指でボタンを押す   水色の輪 = 今つまめる物   患者の手首・肘をつまんで腕を動かす' : '左スティック: 移動   右スティック: 向き（左右）/ 高さ（上下）   B または Y 長押し: リセット   患者の手首・肘を持って腕を動かす', 28, 742);
   uiTex.needsUpdate = true; uiDirty = false;
 }
 
@@ -601,15 +655,15 @@ function buildTitle() {
   const dark = new THREE.MeshStandardMaterial({ color: 0x1b2a44, roughness: 0.6 });
   panel.add(new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.02, 0.4), dark).translateY(0.01));
   const head = new THREE.Mesh(new THREE.PlaneGeometry(0.66, 0.033), new THREE.MeshBasicMaterial({ map: T.titleHead, transparent: true })); head.rotation.x = -Math.PI / 2; head.position.set(0, 0.021, -0.172); panel.add(head);
-  const keys = [['vessel', 0x1f5fb0, 0x163f78], ['needle', 0x1f8a68, 0x155f48], ['depth', 0x8a4aa8, 0x5e3274]];   // 白い部屋でも文字が読める濃い色
-  const KW = 0.21, KD = 0.15, GAP = 0.02, KZ = -0.06;
+  const keys = [['vessel', 0x1f5fb0, 0x163f78], ['needle', 0x1f8a68, 0x155f48], ['depth', 0x8a4aa8, 0x5e3274], ['voice', 0xb5651d, 0x7d4512]];   // 白い部屋でも文字が読める濃い色。4 つ目: 音声ガイド ON/OFF
+  const KW = 0.155, KD = 0.15, GAP = 0.015, KZ = -0.06;
   title = { group: g, slab, panel, buttons: [], t: 0 };
   keys.forEach(([name, col, rim], i) => {
-    const x = (i - 1) * (KW + GAP);
+    const x = (i - (keys.length - 1) / 2) * (KW + GAP);
     const b = new THREE.Group(); b.position.set(x, 0.02, KZ);
     b.add(new THREE.Mesh(new THREE.BoxGeometry(KW, 0.02, KD), new THREE.MeshStandardMaterial({ color: col, roughness: 0.4 })).translateY(0.01));
     b.add(new THREE.Mesh(new THREE.BoxGeometry(KW + 0.004, 0.004, KD + 0.004), new THREE.MeshStandardMaterial({ color: rim, roughness: 0.5 })).translateY(0.002));
-    const lab = new THREE.Mesh(new THREE.PlaneGeometry(KW - 0.012, KD - 0.016), new THREE.MeshBasicMaterial({ map: T.titleLabels[name].texture, transparent: true })); lab.rotation.x = -Math.PI / 2; lab.position.y = 0.021; b.add(lab);
+    const lab = new THREE.Mesh(new THREE.PlaneGeometry(KW - 0.012, (KW - 0.012) * 300 / 512), new THREE.MeshBasicMaterial({ map: T.titleLabels[name].texture, transparent: true })); lab.rotation.x = -Math.PI / 2; lab.position.y = 0.021; b.add(lab);   // ラベルはテクスチャの縦横比のまま
     panel.add(b);
     panel.add(new THREE.Mesh(new THREE.BoxGeometry(KW + 0.008, 0.003, KD + 0.008), new THREE.MeshStandardMaterial({ color: 0x0e1626 })).translateY(0.021).translateX(x).translateZ(KZ));
     const btn = registerButton('title_' + name, panel, () => toggleTitleSetting(name), { cap: b, topOffset: [0, 0.021, 0], travel: 0.012, hitBox: [KW / 2, KD / 2] });   // 人差し指を立てた手（トリガー/グリップを握る）でだけ押せる。判定はキーの矩形の中だけ
@@ -630,8 +684,10 @@ function drawTitleLabels() {
   T.titleLabels.vessel.draw('血管', config.vessel === 'avf' ? '自己血管\nAVF' : '人工血管\nAVG');
   T.titleLabels.needle.draw('穿刺針', config.needle === 'metal' ? '金属翼状針' : 'カニューラ型\n留置針');
   T.titleLabels.depth.draw('深さ', config.deep ? '深い\n（エコー下）' : '標準');
+  T.titleLabels.voice.draw('音声ガイド', config.voice ? 'ON' : 'OFF');
 }
 function toggleTitleSetting(name) {
+  if (name === 'voice') { config.voice = !config.voice; updateSettingLabels(); drawTitleLabels(); return; }   // 音声ガイド ON/OFF（血管は作り直さない）
   if (name === 'vessel') config.vessel = config.vessel === 'avf' ? 'avg' : 'avf';
   else if (name === 'needle') config.needle = config.needle === 'metal' ? 'cannula' : 'metal';
   else config.deep = !config.deep;
@@ -650,6 +706,8 @@ function returnToTitle(initial = false) {
 }
 function enterTitle() {
   titleMode = true;
+  if (voice.ok) speechSynthesis.cancel();
+  voice.queue.length = 0; if (voice.el) { voice.el.pause(); voice.el = null; }
   title.hidden = scene.children.filter(o => o !== title.group && o !== dolly && !o.isLight && o.visible);   // 隠した物だけをスタート時に戻す（元から非表示の物はそのまま）
   for (const o of title.hidden) o.visible = false;
   title.group.visible = true;
@@ -674,6 +732,7 @@ function startGame() {
   resetAll();
   recenterPlayer();
   addLog(`トレーニング開始: ${C.VESSEL_TYPES[config.vessel].label} / ${C.NEEDLE_TYPES[config.needle].label}` + (config.deep ? ' / 深い血管（エコー下）' : ''), 'ok');
+  speak('トレーニングを開始します。', true);
 }
 // 開始位置: 術者はベッド脇の原点に立ち、ベッド（-z）を向く。頭の向きに合わせてドリーを回し、頭の水平位置を原点へ。
 // 目の高さが立位より低ければ（座ったまま等）、立位の目の高さ（1.62m）になるまで持ち上げる
@@ -1028,8 +1087,30 @@ function onSelectStart(cs) {
     if (!ud.torn) { setPouchTorn(t.obj, true); haptic(cs, 0.5, 50); haptic(t.held, 0.3, 50); addLog('アルコール綿のパウチを開封しました → 中の綿を取り出す', 'info'); return; }
     if (!ud.taken) { takeSwab(cs, t); return; }
   }
-  // 反対の手の甲に貼ったテープ: 手か指先がテープから 8cm 以内なら最優先で剥がす（近くに留置した針があっても針を掴み直さない）
   fingerTip(cs, _v3);
+  // 接続済みの回路コネクタ: 手か指先がコネクタから 8cm 以内なら外して手に持つ（脱血不良などで刺し直すため。運転中なら停止して減点）
+  {
+    let best = null, bestD = 0.08;
+    for (const t of toolList) {
+      if (t.kind !== 'connector' || !t.fixed || !state.connected[t.site] || t.held) continue;
+      t.obj.getWorldPosition(_v2);
+      const d = Math.min(_v.distanceTo(_v2), _v3.distanceTo(_v2));
+      if (d < bestD) { bestD = d; best = t; }
+    }
+    if (best) { disconnectLine(best, cs); return; }
+  }
+  // 針に貼ったテープ: 8cm 以内なら剥がして手に持つ（離すとカートへ戻る。針の上で離せば貼り直し）。全部剥がすと針を抜ける
+  {
+    let best = null, bestD = 0.08;
+    for (const t of toolList) {
+      if (t.kind !== 'tape' || !t.fixed || t.held || !needleOfTape(t)) continue;
+      t.obj.getWorldPosition(_v2);
+      const d = Math.min(_v.distanceTo(_v2), _v3.distanceTo(_v2));
+      if (d < bestD) { bestD = d; best = t; }
+    }
+    if (best) { peelTape(best, cs); return; }
+  }
+  // 反対の手の甲に貼ったテープ: 手か指先がテープから 8cm 以内なら最優先で剥がす（近くに留置した針があっても針を掴み直さない）
   {
     let bestT = null, bestD = 0.08;
     for (const t of toolList) {
@@ -1074,6 +1155,7 @@ function nearestTool(cs, p) {
   let best = null, bestD = 0;
   for (const t of toolList) {
     if (t.held || t.fixed || t.locked || t.taped) continue;
+    if (t.kind === 'needle' && state.connected[t.site]) continue;   // 回路がつながった針は、先に回路を外さないと持てない
     if (t.onHand === cs) continue;                       // 自分の手の甲に貼ったテープは反対の手で剥がす
     t.obj.localToWorld(_v2.copy(t.grabOffset));
     const d = (t.onHand ? 0.06 : t.stuck ? 0.06 : t.grabR) - p.distanceTo(_v2);   // 留置した針はハブのすぐ近くでだけ掴み直せる
@@ -1296,6 +1378,7 @@ function takeSwab(cs, pouch) {
   addLog('アルコール綿を取り出しました → 穿刺部を中心から外側へ消毒', 'info');
 }
 function resetNeedleState(tool) {
+  if (tool.site) for (const k of ['needle', 'stylet', 'tape', 'bleed', 'connect', 'clamp']) if (state.done[k + tool.site]) { state.done[k + tool.site] = false; uiDirty = true; }   // 抜針 → その針の手順をやり直し
   tool.punctured = false; tool.inVessel = false; tool.perforated = false; tool.everFlash = false; tool.styletOut = false; tool.styletAnim = -1; tool.stuck = false; tool.taped = false; tool.stenHit = false;
   if (!tool.held) setWingsFolded(tool.obj, false);
   setFlash(tool, false);
@@ -1408,7 +1491,7 @@ function releaseHeld(cs) {
     if (tool.punctured && !tool.perforated) {
       // 刺さったまま留置（血管内なら寝かせて固定姿勢へ）
       if (tool.inVessel) {
-        if (tool.angle > 18 && !state.done['needle' + tool.site]) { state.score -= 3; addLog('逆血後は針を寝かせて進めてから固定しましょう（自動で寝かせました）−3', 'warn'); }
+        if (tool.angle > 18 && !state.done['needle' + tool.site]) addLog('針を寝かせて固定姿勢にしました', 'info');   // 減点しない（手を離せば自動で寝かせる）
         layDownNeedle(tool);
         tool.stuck = true; P.parentFor(P.toArm(tool.obj.getWorldPosition(_v3), _v3).x).attach(tool.obj);
         state.info = '';
@@ -1519,6 +1602,28 @@ function applyTapeOnSkin(tape, n, kind) {
   P.placeCanon(tape.obj, new THREE.Vector3(0, 0, 0), null, c.x); n.obj.attach(tape.obj);
   setTapeApplied(tape.obj, geo);
 }
+// 針に貼ってあるテープなら、その針
+const needleOfTape = tape => ['A', 'V'].map(s => tools['needle' + s]).find(n => n && n.obj === tape.obj.parent) || null;
+// テープを剥がして手に持つ。その針のテープが 0 枚になれば固定の手順をやり直し（針を抜けるようになる）
+function peelTape(tape, cs) {
+  const n = needleOfTape(tape);
+  tape.fixed = false; resetTape(tape.obj);
+  if (n) {
+    const site = n.site; state.taped[site] = Math.max(0, state.taped[site] - 1);
+    if (state.taped[site] === 0) { n.taped = false; state.done['tape' + site] = false; }
+  }
+  grab(cs, tape);
+  addLog(`${n ? n.site + '針の' : ''}テープを剥がしました（離すとカートへ戻ります。針の上で離すと貼り直し）`, 'info'); uiDirty = true;
+}
+// 接続済みの回路を針から外して手に持つ。接続・クランプ開放・ポンプの手順はやり直し。運転中なら停止して減点
+function disconnectLine(conn, cs) {
+  const site = conn.site;
+  state.connected[site] = false; conn.fixed = false;
+  if (state.pumpOn) { state.pumpOn = false; state.flowT = -1; state.flowDone = false; room.setPumpRunning(false); penalty(5, '運転中に回路を外しました（ポンプ停止）'); }
+  for (const id of ['connect' + site, 'clamp' + site, 'pump']) state.done[id] = false;
+  grab(cs, conn); updateLine(conn, 'held');
+  addLog(`${site}針から血液回路を外しました（離すと装置側へ戻ります。テープを剥がせば針を抜けます）`, 'info'); uiDirty = true;
+}
 function connectLine(conn) {
   conn.obj.getWorldPosition(_v);
   const n = tools['needle' + conn.site];
@@ -1559,7 +1664,7 @@ function startPump() {
     const ud = tools['needle' + site].obj.userData;
     if (ud.clamp && !ud.clampOpen) { penalty(5, `${site}針のクランプが閉じています（閉塞アラーム）`); return; }
   }
-  if (!tools.needleA?.inVessel) { penalty(10, 'A針の先端が血管内にないため脱血できません（脱血不良アラーム）。A針を刺し直してから運転'); haptic(controllers[0], 1, 300); return; }
+  if (!tools.needleA?.inVessel) { penalty(10, 'A針の先端が血管内にないため脱血できません（脱血不良アラーム）。回路を外し、テープを剥がして抜針し、刺し直してから運転'); haptic(controllers[0], 1, 300); return; }
   state.pumpOn = true; state.flowT = 0; state.vLeak = false;
   room.setPumpRunning(true);
   addLog('血液ポンプ開始 → A針から血液が回路へ流れ始めました', 'ok');
@@ -1568,8 +1673,7 @@ function startPump() {
 function withdrawStylet(tool, cs) {
   if (tool.styletOut) return;
   if (!tool.inVessel && !tool.everFlash) penalty(15, '逆血を確認する前に内筒を抜去');
-  else if (tool.held && tool.lastDepth - tool.flashDepth < 0.002) penalty(10, '逆血後にカニューラを進めずに内筒を抜去（外筒先端が血管外のおそれ）');
-  else addLog('逆血確認後にカニューラを進めて内筒抜去 ✔', 'ok');
+  else addLog('逆血確認後に内筒抜去 ✔', 'ok');   // 逆血後に進めたかどうかは減点しない（刺し方は術者の流儀に任せる）
   tool.styletOut = true; tool.styletAnim = 0;
   addLog('内筒（金属針）を抜去 → 針廃棄容器へ。外筒（逆止弁付き）を留置', 'info');
   haptic(cs, 0.5, 60);
@@ -1715,7 +1819,7 @@ function selfTestGrab() {
       st.obj.updateMatrixWorld(true);
       const F = st.obj.localToWorld(STETH_FACE.clone());
       const sink = a.r - Math.hypot(F.y - a.y, F.z - a.z);
-      log('聴診器 皮膚で止まる', sink <= 0.0025 && sink >= -0.001, `: 沈み込み=${(sink * 1000).toFixed(1)}mm`);   // 腕の側面の部位では面の向きの分で 2mm 程度まで許容
+      log('聴診器 皮膚で止まる', sink <= 0.0035 && sink >= -0.001, `: 沈み込み=${(sink * 1000).toFixed(1)}mm`);   // 腕の側面の部位では面の向きの分で 3mm 程度まで許容（seed 5 で 2.9mm）
       fake.held = null; st.held = null; returnHome(st);
     }
     // テープ: 2 枚貼り済みの針が 6cm 隣にあっても、翼の上で離したテープはその針に貼れるか
@@ -1943,6 +2047,27 @@ function selfTestGrab() {
       state.palpateTime = 0; state.done.palpate = savedDone; state.info = '';
       log('触知: 穿刺時は立てた人差し指の先が内腔の真上にあるときだけ拍動（縁の外・横 1.5cm・指を立てない手では伝わらない）、学習中は開いた手で触れるだけで伝わる', onTop && !edge && !beside && !notPointing && learn, `: 真上=${onTop} 縁の外(${(edgeOff * 1000).toFixed(1)}mm)=${edge} 横=${beside} 指を立てない=${notPointing} 学習中(開いた手・1cm横)=${learn}`);
     }
+    // 刺し直し: 接続済みの回路を外す → テープを剥がす → 針を持てる → 抜針でその針の手順がやり直し
+    {
+      const n = tools.needleA, tp = tools.tape0, conn = tools.connA, gp = new THREE.Vector3();
+      const sv = P.vessel.sites.A;
+      scene.attach(n.obj); n.obj.position.copy(P.toWorld(new THREE.Vector3(sv.x, sv.y + 0.01, sv.z))); n.obj.quaternion.identity(); n.obj.updateMatrixWorld(true);
+      n.stuck = true; n.taped = true; n.punctured = true; n.inVessel = false; n.styletOut = true; state.taped.A = 1;   // 留置針なら内筒は抜去済み
+      tp.fixed = true; n.obj.attach(tp.obj); conn.fixed = true; n.obj.add(conn.obj); conn.obj.position.set(0, 0, n.obj.userData.lineEndZ); state.connected.A = true;
+      for (const id of ['needleA', 'tapeA', 'connectA']) state.done[id] = true;
+      n.obj.localToWorld(gp.copy(n.grabOffset)); const blocked = nearestTool(fake, gp) !== n;          // 回路がつながった針は持てない
+      disconnectLine(conn, fake); const disc = !state.connected.A && fake.held === conn && !state.done.connectA;
+      fake.held = null; conn.held = null; returnHome(conn);
+      n.obj.localToWorld(gp.copy(n.grabOffset)); const stillBlocked = nearestTool(fake, gp) !== n;     // テープが残っていれば持てない
+      peelTape(tp, fake); const peeled = !n.taped && !state.done.tapeA && fake.held === tp && state.taped.A === 0;
+      fake.held = null; tp.held = null; returnHome(tp);
+      n.obj.localToWorld(gp.copy(n.grabOffset)); const grabbable = nearestTool(fake, gp) === n;
+      if (grabbable) grab(fake, n);
+      const regrabbed = fake.held === n && !n.stuck;
+      n.punctured = false; resetNeedleState(n); const undone = !state.done.needleA;
+      fake.held = null; n.held = null; returnHome(n); state.connected.A = false; state.taped.A = 0; state.info = '';
+      log('刺し直し: 回路を外す → テープを剥がす → 針を持ち直して抜針 → 手順がやり直し', blocked && disc && stillBlocked && peeled && grabbable && regrabbed && undone, `: 接続中は持てない=${blocked} 回路外し=${disc} テープ残りで持てない=${stillBlocked} 剥離=${peeled} 持てる=${grabbable} 持ち直し=${regrabbed} やり直し=${undone}`);
+    }
     // タイトルへ戻るボタン: 透析室の物が隠れてタイトルが出る → スタートで透析室に戻る
     {
       returnToTitle();
@@ -2165,6 +2290,76 @@ function initAudio() {
   src.start();
   audio = { ctx, pulse, master };
 }
+// 音声ガイド: ブラウザ内蔵の合成音声（Web Speech API）で手順を読み上げる。端末内の日本語音声を使うので無料・通信不要。
+// 日本語音声が無い端末では無音（サイドテーブルの「音声ガイド」キーを押すと記録に注意が出る）。?debug=voice で使える音声を console に出す
+// 再生の優先順: 1) 端末の日本語合成音声（Web Speech API）、2) 同梱の音声ファイル（assets/voice/manifest.json: 文 → ファイル。Irodori-TTS で事前生成。?voice=clips で強制）
+const voice = { ok: typeof speechSynthesis !== 'undefined' && typeof SpeechSynthesisUtterance !== 'undefined', v: null, stepId: null, pendingId: null, timer: 0,
+  clips: null, queue: [], el: null, forceClips: location.search.includes('voice=clips') };
+fetch('./assets/voice/manifest.json').then(r => r.ok ? r.json() : null).then(m => { voice.clips = m; if (m) console.log('[voice] clips:', Object.keys(m).length); }).catch(() => {});
+const useClips = () => !!voice.clips && (voice.forceClips || !voice.v);
+// 読み上げ用の文: 括弧の中（操作の補足）は読まない。コロンは文の切れ目に
+function speechText(t) {
+  let s = String(t);
+  for (let i = 0; i < 3; i++) s = s.replace(/（[^（）]*）|\([^()]*\)/g, '');
+  return s.replace(/\s*[:：]\s*/g, '。').replace(/[ 　]+/g, ' ').replace(/、(?=\s*[、。])/g, '').replace(/。\s*。+/g, '。').replace(/^[、。\s]+/, '').trim();
+}
+// 照合用: 句読点・空白・記号を除き、数値を # に（tools_voice.py の生成文と細部が違っても当たるように）
+const normKey = t => speechText(t).replace(/[0-9]+(\.[0-9]+)?/g, '#').replace(/[^\p{L}\p{N}#]/gu, '');
+const stepSpeech = s => `${STEPS.indexOf(s) === 0 ? 'まず、' : '次は、'}${s.label}。${s.say || s.hint}`;   // 最初の手順は「まず、」（「まずは」は合成音声の先頭に「い」のような音が出る）
+// 文 → 音声ファイルの列。手順・減点は正規化した文で探す、終了のスコアは「終了」「数」「評価」の 3 つをつなぐ
+function clipsFor(text) {
+  const m = voice.clips; if (!m) return null;
+  if (!voice.index) { voice.index = {}; for (const k of Object.keys(m)) voice.index[/^fin:/.test(k) ? k : normKey(k)] = m[k]; }
+  const hit = k => voice.index[k] ? ['./assets/voice/' + voice.index[k]] : null;
+  const fin = /^トレーニング終了。スコアは (\d+) 点、(.+) です。$/.exec(text);
+  if (fin) return hit('fin:' + fin[1]);   // 点数ごとに 1 クリップ（評価つき）
+  if (text.startsWith('減点。手順の順番が違います')) return hit(normKey('減点。手順の順番が違います。'));   // 手順名が入るので一般形で 1 つ
+  return hit(normKey(text));
+}
+function playClips(files, interrupt) {
+  if (interrupt) { voice.queue.length = 0; if (voice.el) { voice.el.pause(); voice.el = null; } }
+  voice.queue.push(...files);
+  if (!voice.el) nextClip();
+}
+function nextClip() {
+  const f = voice.queue.shift(); if (!f) { voice.el = null; return; }
+  const el = new Audio(f); voice.el = el; el.volume = 1.0;
+  el.onended = el.onerror = () => { if (voice.el === el) { voice.el = null; nextClip(); } };
+  el.play().catch(() => { if (voice.el === el) { voice.el = null; nextClip(); } });
+}
+function pickVoice() {
+  if (!voice.ok) return;
+  const vs = speechSynthesis.getVoices().filter(v => /^ja/i.test(v.lang));
+  voice.v = vs.find(v => /Nanami|Google|Kyoko|O-ren|Natural/i.test(v.name)) || vs[0] || null;
+  if (vs.length && !voice.logged) { voice.logged = true; console.log('[voice] ja:', vs.map(v => v.name).join(', '), '→', voice.v?.name); }
+}
+if (voice.ok) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function speak(text, interrupt = false) {
+  if (!config.voice || !text || titleMode) return;
+  if (useClips()) { const files = clipsFor(text); if (files) playClips(files, interrupt); return; }
+  if (!voice.ok) return;
+  try {
+    if (interrupt) speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(speechText(text).replace(/[☐☑✔]/g, '').replace(/A針/g, 'エー針').replace(/V針/g, 'ブイ針').replace(/A\/V/g, 'エー・ブイ'));
+    u.lang = 'ja-JP'; if (voice.v) u.voice = voice.v; u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
+    speechSynthesis.speak(u);
+  } catch (e) { /* 非対応 */ }
+}
+// 手順が進んだら次の手順（名前とやり方）を読み上げる。完了音の後 0.8 秒置いてから。タイトル画面では読まない
+function stopSpeech() {
+  if (voice.ok) speechSynthesis.cancel();
+  voice.queue.length = 0; if (voice.el) { voice.el.pause(); voice.el = null; }
+}
+function updateVoice(dt) {
+  if (!config.voice || !(voice.ok || voice.clips)) return;
+  if (titleMode) { voice.stepId = voice.pendingId = null; return; }
+  const cur = currentStep(), id = state.finished ? 'done' : cur ? cur.id : null;
+  if (id !== voice.pendingId) { if (voice.pendingId !== null && !state.finished) stopSpeech(); voice.pendingId = id; voice.timer = 0; return; }   // 手順が進んだ: 読み上げ中の案内は止める（終了時はスコアの読み上げを残す）
+  if (id === voice.stepId) return;
+  voice.timer += dt; if (voice.timer < 0.8) return;
+  voice.stepId = id;
+  if (cur && !state.finished) speak(stepSpeech(cur));
+}
 // 効果音（合成）: tick = 触れた/持った（強さで音の高さと長さ）, ok = 手順完了, bad = 減点, button = ボタン押下。音量は控えめ
 function cue(kind, intensity = 0.5, ms = 60) {
   if (!audio || audio.ctx.state !== 'running') return;   // 音声はユーザー操作（VR 開始・トリガー）で初期化済みのときだけ
@@ -2268,6 +2463,7 @@ function loop() {
     }
   }
   updateFlow(dt);
+  updateVoice(dt);
   room.update(dt);
   updateStethTube();
 
@@ -2730,7 +2926,7 @@ function updateHeld(cs, tool, dt) {
       if (state.swabPts.length === 0 || _v2.distanceTo(state.swabPts[state.swabPts.length - 1]) > 0.015) state.swabPts.push(_v2.clone());
       // 拭いた所を皮膚に描く（消毒された範囲が見える）
       if (!tool.lastMark || _v2.distanceTo(tool.lastMark) > 0.003) { tool.lastMark = (tool.lastMark || new THREE.Vector3()).copy(_v2); P.markSwab(_v2, 0.013); }
-      const p = Math.min(1, state.swabDistance / 0.35);
+      const p = Math.min(1, state.swabDistance / 0.12);   // 拭いた距離 12cm で 100%（直径 5〜7cm を 2 周ほど）
       if (!state.disinfected) { state.info = `消毒中… ${(p * 100).toFixed(0)}%（穿刺点を中心に外側へ円を描くように。拭いた範囲が皮膚に表示されます）`; uiDirty = true; }
       if (p >= 1 && !state.disinfected) {
         state.disinfected = true; state.info = '';
@@ -2781,7 +2977,6 @@ function updateHeld(cs, tool, dt) {
       else if (V.deep) penalty(10, '深い血管をエコーなしで穿刺（ブラインド穿刺）');
       if (V.cfg.usesTourniquet && !state.tourniquetOn) penalty(10, '駆血せずに穿刺（血管が怒張していない）');
       if (state.tourniquetOn && clock.elapsedTime - state.tourniquetAt > 60 && !state.tourniquetWarned) { state.tourniquetWarned = true; penalty(5, '駆血時間が 1 分を超えています'); }
-      if (angle < a0 || angle > a1) penalty(10, `刺入角度が推奨範囲外（${angle.toFixed(0)}°）`);
       const site = V.sites[tool.site];
       if (Math.hypot(_v.x - site.x, _v.z - site.z) > 0.035) penalty(5, `${tool.site}針の穿刺位置が目標からずれています`);
       const other = tools[tool.site === 'A' ? 'needleV' : 'needleA'];
@@ -2789,7 +2984,7 @@ function updateHeld(cs, tool, dt) {
       const oc = otherController(cs);
       let fixed = false;
       if (oc && !oc.held) { P.toArm(fingerTip(oc, _v3), _v3); fixed = _v3.distanceTo(_v) < 0.09 && _v3.y < sy + 0.05; }
-      if (fixed) addLog('皮膚を伸展・固定して穿刺 ✔', 'ok'); else penalty(5, '皮膚の固定なし（反対の手で穿刺部の皮膚を伸展）');
+      if (fixed) addLog('皮膚を伸展・固定して穿刺 ✔', 'ok');   // 皮膚の固定は減点しない（エコー下穿刺では反対の手がプローブを持つ。刺し方は術者の流儀に任せる）
     }
     if (tool.punctured) {
       if (depth <= 0) {
@@ -2834,6 +3029,7 @@ function updateHeld(cs, tool, dt) {
 function setupVRButton() {
   const btn = document.getElementById('vrbtn'), info = document.getElementById('info');
   if (location.search.includes('noui=1')) document.getElementById('overlay').style.display = 'none';   // デバッグ描画用: 画面下の案内を隠す
+  if (location.search.includes('debug=voice') && voice.ok) setTimeout(() => console.log('[voice] all:', speechSynthesis.getVoices().map(v => `${v.name} (${v.lang})`).join(', ')), 1500);
   if (!navigator.xr) {
     btn.textContent = 'WebXR 非対応ブラウザ';
     info.innerHTML += '<br><span style="color:#ffd166">このブラウザは WebXR に対応していません。Quest のブラウザで開いてください（マウスで見学は可能）。</span>';

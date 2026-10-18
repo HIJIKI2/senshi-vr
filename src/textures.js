@@ -301,8 +301,8 @@ export function createTextures() {
     c.fillStyle = '#e8eef7'; c.font = 'bold 27px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
     c.fillText('設定（押して切り替え → リセット）', w / 2, h / 2);
   });
-  T.labels = { vessel: makeLabel(), needle: makeLabel(), depth: makeLabel() };
-  T.titleLabels = { vessel: makeLabel(), needle: makeLabel(), depth: makeLabel() };   // タイトル画面の大きなキー
+  T.labels = { vessel: makeLabel(), needle: makeLabel(), depth: makeLabel(), voice: makeLabel() };
+  T.titleLabels = { vessel: makeLabel(), needle: makeLabel(), depth: makeLabel(), voice: makeLabel() };   // タイトル画面の大きなキー
   T.titleHead = make(1024, 52, (c, w, h) => { c.clearRect(0, 0, w, h); c.fillStyle = '#cfe0f5'; c.font = 'bold 30px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('キーを指で押して設定を選び、下のスタートを押してください', w / 2, h / 2); });
   T.titleStart = make(1024, 256, (c, w, h) => { c.clearRect(0, 0, w, h); c.fillStyle = '#ffffff'; c.font = 'bold 120px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('スタート', w / 2, h / 2 - 20); c.font = 'bold 36px sans-serif'; c.fillStyle = '#d8f5e2'; c.fillText('START — タッチして開始', w / 2, h / 2 + 82); });
 

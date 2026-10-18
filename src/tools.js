@@ -211,8 +211,8 @@ export function makeSettingsPanel(T) {
   g.add(box(0.3, 0.02, 0.16, std(0x2b3038, { roughness: 0.6 }), [0, 0.01, 0]));
   g.add(mesh(new THREE.PlaneGeometry(0.28, 0.03), new THREE.MeshBasicMaterial({ map: T.settingsTitle, transparent: true }), [0, 0.0205, -0.06], [-Math.PI / 2, 0, 0]));
   const buttons = [];
-  const keys = [['vessel', 0x3a7bd5, 0x2b5fa8], ['needle', 0x2ea58a, 0x227d68], ['depth', 0xb06ad0, 0x7d4a96]];
-  const KW = 0.09, GAP = 0.008;
+  const keys = [['vessel', 0x3a7bd5, 0x2b5fa8], ['needle', 0x2ea58a, 0x227d68], ['depth', 0xb06ad0, 0x7d4a96], ['voice', 0xd0812a, 0x96591a]];   // 4 つ目: 音声ガイド ON/OFF
+  const KW = 0.068, GAP = 0.007;
   keys.forEach(([name, col, rim], i) => {
     // 押し込み可能なキー（b 自体が沈む。沈み込み量は app.js の物理ボタン処理が制御）
     const x = (i - (keys.length - 1) / 2) * (KW + GAP);
@@ -223,7 +223,7 @@ export function makeSettingsPanel(T) {
     g.add(b);
     // キー穴（沈んだときに見える暗い縁）
     g.add(box(KW + 0.008, 0.003, 0.088, std(0x15181d, { roughness: 0.8 }), [x, 0.0205, 0.015]));
-    buttons.push({ name, obj: b, cap: b, topOffset: [0, 0.0125, 0], travel: 0.007, hitR: 0.04 });
+    buttons.push({ name, obj: b, cap: b, topOffset: [0, 0.0125, 0], travel: 0.007, hitBox: [KW / 2, 0.04] });   // 隣のキーを巻き込まない矩形判定
   });
   return { group: g, buttons };
 }
