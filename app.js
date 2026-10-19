@@ -96,7 +96,7 @@ function buildSteps() {
     { id: 'open',       label: '穿刺セットを開封',           hint: '穿刺セットの箱に手を近づけてトリガーを引くと蓋が開きます。' },
     { id: 'sheet',      label: '滅菌シーツを腕の下に敷く',   hint: 'セット内の滅菌シーツ（緑）を持ち、患者の前腕の上で手を離すと腕の下に敷かれます。反対の手で患者の手首を持つ（トリガー）と前腕を持ち上げられるので、持ち上げて敷くとスムーズです。', requires: ['open'] },
     { id: 'disinfect',  label: '穿刺部をアルコール綿で消毒', hint: '開始セットのアルコール綿のパウチを持ち、反対の手で開封口に触れてトリガーを引くと破れます。もう一度トリガーで中の綿を取り出し、穿刺予定部位を中心に外側へ円を描くように（直径 5〜7cm）消毒します。乾燥を待ってから穿刺。', requires: ['sheet'] },
-    ...(tq ? [{ id: 'tourniquet', label: '駆血帯を上腕に巻く', hint: '駆血帯を持ち、患者の上腕の上で手を離すと巻かれ、シャント血管が怒張します。駆血は 1 分以内に。', requires: ['disinfect'] }] : []),
+    ...(tq ? [{ id: 'tourniquet', label: '駆血帯を上腕に巻く', hint: '駆血帯を持ち、患者の上腕の上で手を離すと巻かれ、シャント血管が怒張します。駆血は 3 分以内に。', requires: ['disinfect'] }] : []),
     ...(deep ? [{ id: 'echo', label: 'エコーで穿刺血管を描出（短軸で画面中央に）', hint: 'タブレットは手で持って見やすい所（ベッドの上や患者の体側に立て掛ける）に置けます。カートのプローブをトリガーで持ち（持ったまま。離すときはもう一度トリガー）、ゼリーを付けたつもりで穿刺予定部位の皮膚に当てます。血管を横切る向き（短軸）で、血管の黒い円がセンターライン（画面上の▼）の下に来るようにプローブを動かし、深さ・径の表示を確認します（2 秒保持）。', requires: ['disinfect'] }] : []),
     ...per('V'), ...per('A'),
     ...(tq ? [{ id: 'tourniquetOff', label: '駆血帯を外す（両針の穿刺後・回路接続前）', hint: '両方の穿刺・固定が終わったら、上腕の駆血帯に手を近づけてトリガーを引いて外します。駆血したまま回路を接続しないこと。', requires: [lastA, lastV] }] : []),
@@ -1362,7 +1362,7 @@ function removeTourniquet(cs) {
   grab(cs, tq);
   const stuck = s => !!tools['needle' + s]?.stuck;
   if (stuck('A') && stuck('V')) {
-    if (clock.elapsedTime - state.tourniquetAt > 90) penalty(5, '駆血時間が長すぎます（1 分以内を目安に）');
+    if (clock.elapsedTime - state.tourniquetAt > 240) penalty(5, '駆血時間が長すぎます（3 分以内を目安に）');
     addLog('駆血帯を外しました ✔（回路接続へ）', 'ok');
     if (STEPS.some(s => s.id === 'tourniquetOff')) completeStep('tourniquetOff');
   } else if (stuck('A') || stuck('V')) addLog('片方の穿刺が終わる前に駆血帯を外しました（必要なら巻き直し）', 'warn');
@@ -1482,7 +1482,7 @@ function releaseHeld(cs) {
       tool.obj.quaternion.copy(q); tool.obj.scale.setScalar(1);
       setTourniquetApplied(tool.obj);
       haptic(cs, 0.7, 100);
-      if (C.VESSEL_TYPES[config.vessel].usesTourniquet) { completeStep('tourniquet'); addLog('駆血によりシャント血管が怒張しました（1 分以内に穿刺）', 'info'); }
+      if (C.VESSEL_TYPES[config.vessel].usesTourniquet) { completeStep('tourniquet'); addLog('駆血によりシャント血管が怒張しました（3 分以内に穿刺）', 'info'); }
       else penalty(3, '人工血管（グラフト）では駆血は不要です');
       return;
     }
@@ -2976,9 +2976,9 @@ function updateHeld(cs, tool, dt) {
       if (guided) addLog('エコーガイド下に穿刺 ✔', 'ok');
       else if (V.deep) penalty(10, '深い血管をエコーなしで穿刺（ブラインド穿刺）');
       if (V.cfg.usesTourniquet && !state.tourniquetOn) penalty(10, '駆血せずに穿刺（血管が怒張していない）');
-      if (state.tourniquetOn && clock.elapsedTime - state.tourniquetAt > 60 && !state.tourniquetWarned) { state.tourniquetWarned = true; penalty(5, '駆血時間が 1 分を超えています'); }
+      if (state.tourniquetOn && clock.elapsedTime - state.tourniquetAt > 180 && !state.tourniquetWarned) { state.tourniquetWarned = true; penalty(5, '駆血時間が 3 分を超えています'); }
       const site = V.sites[tool.site];
-      if (Math.hypot(_v.x - site.x, _v.z - site.z) > 0.035) penalty(5, `${tool.site}針の穿刺位置が目標からずれています`);
+      if (Math.hypot(_v.x - site.x, _v.z - site.z) > 0.035) addLog(`${tool.site}針は目安の部位（${site.label}）から離れた所に刺しました`, 'info');   // 減点しない（刺す場所は術者が選ぶ。細い所なら狭窄の減点が別にある）
       const other = tools[tool.site === 'A' ? 'needleV' : 'needleA'];
       if (other?.stuck) { P.toArm(other.obj.getWorldPosition(_v3), _v3); if (_v3.distanceTo(_v) < 0.05) penalty(5, 'A針とV針の間隔が近すぎます（再循環のおそれ）'); }
       const oc = otherController(cs);
@@ -3004,7 +3004,7 @@ function updateHeld(cs, tool, dt) {
         if (!tool.everFlash) {
           tool.everFlash = true; tool.flashDepth = depth; addLog(cannula ? '逆血確認 → 針を寝かせて 2〜3mm 進め、トリガーを離して留置 → 内筒を抜去' : '逆血（フラッシュバック）確認 → 針を寝かせて 2〜3mm 進め、トリガーを離して留置', 'ok');
           // 狭窄部（径が細い所）への穿刺: エコーで太い所を選ぶべき
-          if (cl.sten > 0.35 && !tool.stenHit) { tool.stenHit = true; penalty(10, `狭窄部に穿刺（血管径 ${(r * 2000).toFixed(1)}mm と細い。エコーで太い所を選ぶ）`); }
+          if (cl.sten > 0.35 && !tool.stenHit) { tool.stenHit = true; addLog(`細い所（狭窄部、血管径 ${(r * 2000).toFixed(1)}mm）に穿刺しました`, 'info'); }   // 減点しない（刺す場所は術者が選ぶ。記録だけ残す）
         }
       }
       tool.inVessel = inVessel;
